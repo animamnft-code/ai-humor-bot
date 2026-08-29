@@ -51,49 +51,13 @@ logger = logging.getLogger(__name__)
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ===== АВТОВЫБОР МОДЕЛИ =====
-# Список моделей в порядке приоритета
-CANDIDATE_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "gpt-oss-120b",
-    "gpt-oss-20b",
-    "mixtral-8x7b-32768",
-]
-
-selected_model = None
-
-def choose_model():
-    """Пробует модели из списка, возвращает первую доступную."""
-    global selected_model
-    for model in CANDIDATE_MODELS:
-        try:
-            # Делаем тестовый запрос с минимальным промптом
-            response = groq_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=5,
-            )
-            logger.info(f"Модель доступна: {model}")
-            selected_model = model
-            return model
-        except Exception as e:
-            logger.warning(f"Модель {model} недоступна: {e}")
-    # Если ни одна не подошла, используем последнюю (или вызовем исключение)
-    selected_model = CANDIDATE_MODELS[-1]
-    logger.error("Ни одна модель не доступна, использую %s", selected_model)
-    return selected_model
-
-# Выбираем модель при старте
-selected_model = choose_model()
-
 # ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ =====
 def generate_joke():
     """Запрашивает шутку у Groq, возвращает (текст_шутки, тема)."""
     prompt = random.choice(PROMPTS)
     try:
         response = groq_client.chat.completions.create(
-            model=selected_model,
+            model="qwen/qwen3.8-27b",  # МОДЕЛЬ ИЗ AI-PULSE
             messages=[
                 {"role": "system", "content": "Ты - генератор юмора."},
                 {"role": "user", "content": prompt}
