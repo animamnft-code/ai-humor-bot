@@ -86,13 +86,12 @@ def generate_joke_sync(topic):
         return None
 
     # Удаляем возможный тег из текста, если он остался
-    # (мы уже знаем тему, поэтому тег не нужен в публикации)
     joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
     return joke_text
 
 # ===== АСИНХРОННАЯ ПУБЛИКАЦИЯ =====
 async def publish_joke():
-    """Генерирует шутку и публикует её в выбранную тему."""
+    """Генерирует шутку и публикует её в выбранную тему с отключенными уведомлениями."""
     # Выбираем следующую тему по кругу
     topic = get_next_topic()
     thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
@@ -103,15 +102,16 @@ async def publish_joke():
         logger.error("Не удалось получить шутку, пропускаем публикацию.")
         return
 
-    # Публикация только в тематическую ветку
+    # Публикация только в тематическую ветку, без звуковых уведомлений
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
             text=joke_text,
             message_thread_id=thread_id,
             disable_web_page_preview=True,
+            disable_notification=True,  # ← отключаем звуковые уведомления
         )
-        logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id})")
+        logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id}) без уведомлений")
     except TelegramError as e:
         logger.error(f"Ошибка публикации в тему {topic}: {e}")
 
