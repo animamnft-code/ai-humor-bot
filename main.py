@@ -57,7 +57,7 @@ def generate_joke():
     prompt = random.choice(PROMPTS)
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # ЗАМЕНЁННАЯ МОДЕЛЬ
+            model="llama-3.1-8b-instant",  # ЗАМЕНЁННАЯ МОДЕЛЬ
             messages=[
                 {"role": "system", "content": "Ты - генератор юмора."},
                 {"role": "user", "content": prompt}
