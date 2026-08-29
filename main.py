@@ -4,6 +4,7 @@ import time
 import logging
 import threading
 import re
+import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import groq
@@ -51,8 +52,8 @@ logger = logging.getLogger(__name__)
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ =====
-def generate_joke():
+# ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ (синхронная, вызывается через asyncio.to_thread) =====
+def generate_joke_sync():
     """Запрашивает шутку у Groq, возвращает (текст_шутки, тема)."""
     prompt = random.choice(PROMPTS)
     try:
@@ -90,10 +91,11 @@ def generate_joke():
 
     return joke_text, topic
 
-# ===== ФУНКЦИЯ ПУБЛИКАЦИИ =====
-def publish_joke():
+# ===== АСИНХРОННАЯ ПУБЛИКАЦИЯ =====
+async def publish_joke():
     """Генерирует шутку и публикует её в соответствующую тему и в главную."""
-    joke_text, topic = generate_joke()
+    # Вызываем синхронную функцию в отдельном потоке, чтобы не блокировать event loop
+    joke_text, topic = await asyncio.to_thread(generate_joke_sync)
     if not joke_text:
         logger.error("Не удалось получить шутку, пропускаем публикацию.")
         return
@@ -103,7 +105,7 @@ def publish_joke():
 
     # Публикация в тематическую ветку
     try:
-        bot.send_message(
+        await bot.send_message(
             chat_id=CHAT_ID,
             text=joke_text,
             message_thread_id=thread_id,
@@ -115,11 +117,11 @@ def publish_joke():
         return
 
     # Небольшая пауза, чтобы избежать троттлинга
-    time.sleep(2)
+    await asyncio.sleep(2)
 
     # Публикация в главную тему (message_thread_id=None)
     try:
-        bot.send_message(
+        await bot.send_message(
             chat_id=CHAT_ID,
             text=joke_text,
             message_thread_id=None,  # главная тема
@@ -129,16 +131,16 @@ def publish_joke():
     except TelegramError as e:
         logger.error(f"Ошибка публикации в главную тему: {e}")
 
-# ===== ЗАПУСК ЦИКЛА =====
-def run_scheduler():
+# ===== АСИНХРОННЫЙ ПЛАНИРОВЩИК =====
+async def run_scheduler():
     """Бесконечный цикл публикаций."""
     logger.info("Планировщик запущен. Интервал: %d сек.", PUBLISH_INTERVAL)
     while True:
         try:
-            publish_joke()
+            await publish_joke()
         except Exception as e:
             logger.exception("Непредвиденная ошибка в цикле публикаций: %s", e)
-        time.sleep(PUBLISH_INTERVAL)
+        await asyncio.sleep(PUBLISH_INTERVAL)
 
 # ===== HEALTH CHECK (HTTP-сервер) =====
 class HealthHandler(BaseHTTPRequestHandler):
@@ -180,5 +182,8 @@ if __name__ == "__main__":
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
 
-    # Основной планировщик
-    run_scheduler()
+    # Запускаем основной планировщик через asyncio
+    try:
+        asyncio.run(run_scheduler())
+    except KeyboardInterrupt:
+        logger.info("Скрипт остановлен вручную")
