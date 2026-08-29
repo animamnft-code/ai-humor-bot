@@ -31,14 +31,18 @@ TOPIC_IDS = {
 }
 DEFAULT_TOPIC = "быт"
 
+# Список тем для равномерного распределения (в порядке обхода)
+TOPIC_ORDER = ["быт", "работа", "отношения", "деньги", "еда", "спорт", "гаджеты", "учёба", "транспорт", "абсурд"]
+current_topic_index = 0  # счётчик для циклического выбора
+
 # Интервал публикации (сек)
 PUBLISH_INTERVAL = 900  # 15 минут
 
 # Промпты для генерации (случайный выбор для разнообразия)
 PROMPTS = [
-    "Сгенерируй короткую смешную шутку (1-2 предложения). В конце добавь тег [ТЕМА: ...], где ... - одна из категорий: быт, работа, отношения, деньги, еда, спорт, гаджеты, учёба, транспорт, абсурд.",
-    "Придумай остроумную шутку на злобу дня. Обязательно закончи тегом [ТЕМА: ...] с указанием категории из списка: быт, работа, отношения, деньги, еда, спорт, гаджеты, учёба, транспорт, абсурд.",
-    "Расскажи анекдот в одно предложение. В конце напиши [ТЕМА: ...], выбрав одну из категорий: быт, работа, отношения, деньги, еда, спорт, гаджеты, учёба, транспорт, абсурд.",
+    "Сгенерируй короткую смешную шутку (1-2 предложения) на тему «{topic}». В конце добавь тег [ТЕМА: {topic}].",
+    "Придумай остроумную шутку или анекдот на тему «{topic}». Закончи тегом [ТЕМА: {topic}].",
+    "Расскажи смешную фразу или игру слов на тему «{topic}». В конце напиши [ТЕМА: {topic}].",
 ]
 
 # ===== ЛОГИРОВАНИЕ =====
@@ -52,13 +56,22 @@ logger = logging.getLogger(__name__)
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
+# ===== ФУНКЦИЯ ВЫБОРА ТЕМЫ (циклически) =====
+def get_next_topic():
+    """Возвращает следующую тему по кругу."""
+    global current_topic_index
+    topic = TOPIC_ORDER[current_topic_index]
+    current_topic_index = (current_topic_index + 1) % len(TOPIC_ORDER)
+    return topic
+
 # ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ (синхронная, вызывается через asyncio.to_thread) =====
-def generate_joke_sync():
-    """Запрашивает шутку у Groq, возвращает (текст_шутки, тема)."""
-    prompt = random.choice(PROMPTS)
+def generate_joke_sync(topic):
+    """Запрашивает шутку у Groq для указанной темы, возвращает текст шутки."""
+    prompt_template = random.choice(PROMPTS)
+    prompt = prompt_template.format(topic=topic)
     try:
         response = groq_client.chat.completions.create(
-            model="qwen/qwen3.8-27b",  # МОДЕЛЬ ИЗ AI-PULSE
+            model="qwen/qwen3.8-27b",  # МОДЕЛЬ ИЗ AI-PULSE (проверено рабочая)
             messages=[
                 {"role": "system", "content": "Ты - генератор юмора."},
                 {"role": "user", "content": prompt}
@@ -70,40 +83,27 @@ def generate_joke_sync():
         logger.info(f"Groq ответ: {raw_text}")
     except Exception as e:
         logger.error(f"Ошибка вызова Groq: {e}")
-        return None, None
+        return None
 
-    # Парсим тег [ТЕМА: ...]
-    match = re.search(r"\[ТЕМА:\s*([^\]]+)\]", raw_text, re.IGNORECASE)
-    if match:
-        topic_raw = match.group(1).strip().lower()
-        # Сопоставляем с ключами словаря
-        for key in TOPIC_IDS.keys():
-            if topic_raw.startswith(key):
-                topic = key
-                break
-        else:
-            topic = DEFAULT_TOPIC
-        # Удаляем тег из текста
-        joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
-    else:
-        topic = DEFAULT_TOPIC
-        joke_text = raw_text
-
-    return joke_text, topic
+    # Удаляем возможный тег из текста, если он остался
+    # (мы уже знаем тему, поэтому тег не нужен в публикации)
+    joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
+    return joke_text
 
 # ===== АСИНХРОННАЯ ПУБЛИКАЦИЯ =====
 async def publish_joke():
-    """Генерирует шутку и публикует её в соответствующую тему и в главную."""
-    # Вызываем синхронную функцию в отдельном потоке, чтобы не блокировать event loop
-    joke_text, topic = await asyncio.to_thread(generate_joke_sync)
+    """Генерирует шутку и публикует её в выбранную тему."""
+    # Выбираем следующую тему по кругу
+    topic = get_next_topic()
+    thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
+
+    # Генерируем шутку для выбранной темы
+    joke_text = await asyncio.to_thread(generate_joke_sync, topic)
     if not joke_text:
         logger.error("Не удалось получить шутку, пропускаем публикацию.")
         return
 
-    # Определяем ID темы
-    thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
-
-    # Публикация в тематическую ветку
+    # Публикация только в тематическую ветку
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
@@ -114,22 +114,6 @@ async def publish_joke():
         logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id})")
     except TelegramError as e:
         logger.error(f"Ошибка публикации в тему {topic}: {e}")
-        return
-
-    # Небольшая пауза, чтобы избежать троттлинга
-    await asyncio.sleep(2)
-
-    # Публикация в главную тему (message_thread_id=None)
-    try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=joke_text,
-            message_thread_id=None,  # главная тема
-            disable_web_page_preview=True,
-        )
-        logger.info("Опубликовано в главную тему 'Все здесь'")
-    except TelegramError as e:
-        logger.error(f"Ошибка публикации в главную тему: {e}")
 
 # ===== АСИНХРОННЫЙ ПЛАНИРОВЩИК =====
 async def run_scheduler():
