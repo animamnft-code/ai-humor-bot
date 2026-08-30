@@ -28,17 +28,25 @@ TOPIC_EMOJI = {
     "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "транспорт": "✈️", "абсурд": "🎭",
 }
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
+FORMAT_HASHTAGS = {
+    "анекдот": "#анекдоты",
+    "вопрос-ответ": "#вопрос_ответ",
+    "игра слов": "#игра_слов",
+    "смешное определение": "#смешные_определения",
+    "диалог": "#диалоги",
+}
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
 BOT_USERNAME = None
 
 def load_config():
-    global FORMATS, TOPIC_IDS, TOPIC_EMOJI
+    global FORMATS, TOPIC_IDS, TOPIC_EMOJI, FORMAT_HASHTAGS
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
             FORMATS = config.get("formats", FORMATS)
+            FORMAT_HASHTAGS = config.get("hashtags", FORMAT_HASHTAGS)
             TOPIC_IDS = config.get("topic_ids", TOPIC_IDS)
             TOPIC_EMOJI = config.get("topic_emoji", TOPIC_EMOJI)
     else:
@@ -86,11 +94,12 @@ async def check_is_member(user_id):
 def generate_joke_sync(topic, format_type=None, user_settings=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
+    hashtag = FORMAT_HASHTAGS.get(format_type, "")
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
     if user_settings:
         if user_settings.get("name"):
             prompt += f" Используй имя {user_settings['name']}."
-    prompt += " Пиши кратко и смешно, законченный текст. Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "]."
+    prompt += " Пиши кратко и смешно, законченный текст. Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     try:
         response = groq_client.chat.completions.create(
             model="qwen/qwen3.8-27b",
@@ -107,6 +116,9 @@ def generate_joke_sync(topic, format_type=None, user_settings=None):
         joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
         joke_text = joke_text.strip()
         emoji = TOPIC_EMOJI.get(topic, "😄")
+        # Если хэштег не был добавлен моделью, добавляем вручную
+        if hashtag and hashtag not in joke_text:
+            joke_text += f"\n\n<i>{hashtag}</i>"
         return f"{emoji} {joke_text}"
     except Exception as e:
         logger.error(f"Ошибка генерации: {e}")
@@ -216,7 +228,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type, settings)
         if joke:
             await query.message.reply_text(joke)
-            # Возвращаем меню, но игнорируем ошибку "Message is not modified"
             try:
                 await personal_joke_from_callback(update, context)
             except BadRequest as e:
