@@ -340,6 +340,8 @@ async def main():
     application.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))
     await application.initialize()
     await application.start()
+    # Ждём 5 секунд, чтобы старый процесс завершился
+    await asyncio.sleep(5)
     await application.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query", "chat_member"])
     await asyncio.Event().wait()
 
