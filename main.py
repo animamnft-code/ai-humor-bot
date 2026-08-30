@@ -18,9 +18,8 @@ from telegram.error import TelegramError
 # ===== НАСТРОЙКИ =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # ID супергруппы (например, -1003973808650)
+CHAT_ID = os.getenv("CHAT_ID")
 
-# Статические ID тем (известны заранее)
 TOPIC_IDS = {
     "быт": 2,
     "работа": 5,
@@ -35,44 +34,24 @@ TOPIC_IDS = {
 }
 
 TOPIC_EMOJI = {
-    "быт": "🏠",
-    "работа": "💼",
-    "отношения": "❤️",
-    "деньги": "💰",
-    "еда": "🍔",
-    "спорт": "🏁",
-    "гаджеты": "💻",
-    "учёба": "📚",
-    "транспорт": "✈️",
-    "абсурд": "🎭",
+    "быт": "🏠", "работа": "💼", "отношения": "❤️", "деньги": "💰", "еда": "🍔",
+    "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "транспорт": "✈️", "абсурд": "🎭",
 }
 
 TOPIC_WEIGHTS = {
-    "быт": 1.2,
-    "работа": 1.1,
-    "отношения": 1.3,
-    "деньги": 1.0,
-    "еда": 1.0,
-    "спорт": 0.9,
-    "гаджеты": 1.2,
-    "учёба": 0.85,
-    "транспорт": 0.9,
-    "абсурд": 1.4,
+    "быт": 1.2, "работа": 1.1, "отношения": 1.3, "деньги": 1.0, "еда": 1.0,
+    "спорт": 0.9, "гаджеты": 1.2, "учёба": 0.85, "транспорт": 0.9, "абсурд": 1.4,
 }
 
 DEFAULT_TOPIC = "быт"
 
-# Форматы юмора (хранятся в config.json, загружаются при старте)
 FORMATS = []
 FORMAT_HASHTAGS = {}
 FORMAT_MAX_TOKENS = {}
 
-# Настройки реферальной системы
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
-COOLDOWN_SECONDS = 30
 
-# Праздники
 HOLIDAYS = [
     {"name": "Новый год", "month": 1, "day": 1},
     {"name": "День защитника Отечества", "month": 2, "day": 23},
@@ -83,14 +62,13 @@ HOLIDAYS = [
     {"name": "День знаний", "month": 9, "day": 1},
     {"name": "День народного единства", "month": 11, "day": 4},
 ]
-CURRENT_EVENTS = []
 
-# ===== ФАЙЛЫ ДЛЯ ХРАНЕНИЯ ДАННЫХ =====
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
+PERSONAL_TOPIC_ID = None  # будет найден при старте
 
 def load_config():
-    global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, HOLIDAYS, CURRENT_EVENTS
+    global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, HOLIDAYS
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -98,7 +76,6 @@ def load_config():
             FORMAT_HASHTAGS = config.get("hashtags", {})
             FORMAT_MAX_TOKENS = config.get("max_tokens", {})
             HOLIDAYS = config.get("holidays", HOLIDAYS)
-            CURRENT_EVENTS = config.get("current_events", [])
     else:
         FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
         FORMAT_HASHTAGS = {
@@ -120,13 +97,12 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"invites": {}, "daily_limits": {}, "user_settings": {}, "personal_jokes_given": {}}
+    return {"invites": {}, "daily_limits": {}, "user_settings": {}, "personal_jokes_given": {}, "personal_topic_description_sent": False}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ===== ЛОГИРОВАНИЕ =====
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -139,13 +115,11 @@ groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-# ===== ФУНКЦИИ ДЛЯ АВТОПУБЛИКАЦИИ =====
+# ===== ФУНКЦИИ =====
 def get_thread_id(topic):
-    """Возвращает message_thread_id по названию темы."""
     return TOPIC_IDS.get(topic)
 
 def get_current_holiday():
-    """Возвращает название праздника, если сегодня в диапазоне ±7 дней, иначе None."""
     today = datetime.now()
     for holiday in HOLIDAYS:
         holiday_date = datetime(today.year, holiday["month"], holiday["day"])
@@ -155,7 +129,6 @@ def get_current_holiday():
     return None
 
 def get_holiday_bias():
-    """Возвращает вероятность праздничного юмора (плавная кривая)."""
     today = datetime.now()
     closest_holiday = None
     min_delta = 100
@@ -170,9 +143,8 @@ def get_holiday_bias():
     delta = (today - datetime(today.year, closest_holiday["month"], closest_holiday["day"])).days
     if delta < -7 or delta > 7:
         return 0.0
-    # Плавная кривая: -7:0.1, -6:0.15, ..., 0:0.7, ..., +7:0.1
     if delta <= 0:
-        prob = 0.7 + 0.1 * delta  # delta отрицательное, поэтому при -7 prob=0.7-0.7=0.0? посчитаем
+        prob = 0.7 + 0.1 * delta
     else:
         prob = 0.7 - 0.1 * delta
     prob = max(0.05, min(0.7, prob))
@@ -184,7 +156,6 @@ def select_topic():
     return random.choices(topics, weights=weights, k=1)[0]
 
 def generate_joke_sync(topic, format_type=None, holiday=None, user_settings=None):
-    """Генерирует шутку."""
     if format_type is None:
         format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS.get(format_type, "")
@@ -234,7 +205,6 @@ def generate_joke_sync(topic, format_type=None, holiday=None, user_settings=None
     return joke_text
 
 async def publish_joke():
-    """Публикует шутку в группу."""
     topic = select_topic()
     thread_id = get_thread_id(topic)
     if thread_id is None:
@@ -270,9 +240,9 @@ async def scheduler():
             await publish_joke()
         except Exception as e:
             logger.exception("Ошибка в планировщике: %s", e)
-        await asyncio.sleep(random.randint(780, 1020))  # 13-17 минут
+        await asyncio.sleep(random.randint(780, 1020))
 
-# ===== ФУНКЦИИ ДЛЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ =====
+# ===== РЕФЕРАЛЬНАЯ СИСТЕМА =====
 def get_user_data(user_id):
     return data.get(str(user_id), {})
 
@@ -310,10 +280,14 @@ def increment_joke_count(user_id):
 def get_user_settings(user_id):
     return get_user_data(user_id).get("settings", {})
 
-# ===== ОБРАБОТЧИКИ КОМАНД И CALLBACK =====
+# ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
+    if args and args[0] == "personal":
+        # Пользователь пришёл из темы — сразу показываем настройки персонального юмора
+        await personal_joke(update, context)
+        return
     if args and args[0].startswith("ref_"):
         ref_user_id = int(args[0].split("_")[1])
         if ref_user_id != user.id:
@@ -421,6 +395,37 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting", None)
         await personal_joke(update, context)
 
+# ===== НОВЫЕ ФУНКЦИИ ДЛЯ ТЕМЫ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
+async def find_personal_topic():
+    global PERSONAL_TOPIC_ID
+    try:
+        topics = await bot.get_forum_topics(chat_id=CHAT_ID)
+        for topic in topics.topics:
+            if "персональный юмор" in topic.name.lower():
+                PERSONAL_TOPIC_ID = topic.message_thread_id
+                logger.info(f"Найдена тема 'Персональный юмор': {PERSONAL_TOPIC_ID}")
+                return
+        logger.warning("Тема 'Персональный юмор' не найдена")
+    except Exception as e:
+        logger.error(f"Ошибка при поиске темы: {e}")
+
+async def send_personal_topic_description():
+    if not PERSONAL_TOPIC_ID:
+        return
+    if data.get("personal_topic_description_sent"):
+        return
+    text = ("Здесь вы можете получить персональный юмор!\n\n"
+            "Нажмите кнопку ниже, чтобы настроить и получить уникальную шутку.")
+    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{bot.username}?start=personal")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=text, message_thread_id=PERSONAL_TOPIC_ID, reply_markup=reply_markup)
+        data["personal_topic_description_sent"] = True
+        save_data(data)
+        logger.info("Описание темы 'Персональный юмор' отправлено")
+    except Exception as e:
+        logger.error(f"Ошибка отправки описания: {e}")
+
 # ===== HEALTH CHECK =====
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -450,21 +455,26 @@ def run_health_server():
 # ===== ЗАПУСК =====
 async def main():
     try:
-        # Health-сервер в отдельном потоке
         threading.Thread(target=run_health_server, daemon=True).start()
-        # Запускаем планировщик как фоновую задачу
+        
+        # Находим тему «Персональный юмор» и отправляем описание
+        await find_personal_topic()
+        await send_personal_topic_description()
+        
+        # Запускаем планировщик
         asyncio.create_task(scheduler())
+        
         # Регистрируем обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("referral", referral))
         application.add_handler(CommandHandler("personal", personal_joke))
         application.add_handler(CallbackQueryHandler(callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        
         # Запускаем бота
         await application.initialize()
         await application.start()
         await application.updater.start_polling()
-        # Ждём вечно
         await asyncio.Event().wait()
     except Exception as e:
         logger.exception("Критическая ошибка в main: %s", e)
@@ -472,6 +482,6 @@ async def main():
 
 if __name__ == "__main__":
     if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID]):
-        logger.error("Не все переменные окружения заданы (GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID).")
+        logger.error("Не все переменные окружения заданы.")
         exit(1)
     asyncio.run(main())
