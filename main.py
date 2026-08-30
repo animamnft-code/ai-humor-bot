@@ -31,7 +31,7 @@ TOPIC_IDS = {
     "абсурд": 27,
 }
 
-# Эмодзи для каждой темы (временные, можете заменить на реальные из группы)
+# Эмодзи для каждой темы (временные, позже можно заменить)
 TOPIC_EMOJI = {
     "быт": "🏠",
     "работа": "💼",
@@ -45,7 +45,7 @@ TOPIC_EMOJI = {
     "абсурд": "🔮",
 }
 
-# Веса тем (больше вес – чаще публикуется). Разница max/min не более 30%
+# Веса тем (больше вес – чаще публикуется)
 TOPIC_WEIGHTS = {
     "быт": 1.2,
     "работа": 1.1,
@@ -77,7 +77,7 @@ FORMAT_HASHTAGS = {
     "диалог": "#диалоги",
 }
 
-# Российские праздники (без религиозных) - даты в формате (месяц, день)
+# Российские праздники (без религиозных)
 HOLIDAYS = [
     {"name": "Новый год", "month": 1, "day": 1},
     {"name": "День защитника Отечества", "month": 2, "day": 23},
@@ -105,10 +105,8 @@ def get_current_holiday():
     """Возвращает название праздника, если сегодня в диапазоне ±7 дней, иначе None."""
     today = datetime.now()
     for holiday in HOLIDAYS:
-        # Дата праздника в текущем году
         holiday_date = datetime(today.year, holiday["month"], holiday["day"])
         delta = today - holiday_date
-        # Проверяем диапазон от -7 до +7 дней
         if -7 <= delta.days <= 7:
             return holiday["name"]
     return None
@@ -123,14 +121,11 @@ def select_topic():
 # ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ =====
 def generate_joke_sync(topic):
     """Запрашивает шутку у Groq с учётом формата и праздника."""
-    # Случайный формат
     format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS[format_type]
 
-    # Проверяем праздник
     holiday = get_current_holiday()
 
-    # Собираем промпт
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
     if holiday:
         prompt += f" Приурочь его к празднику: {holiday}."
@@ -152,14 +147,13 @@ def generate_joke_sync(topic):
         logger.error(f"Ошибка вызова Groq: {e}")
         return None, None
 
-    # Удаляем тег [ТЕМА: ...] (он нам уже известен)
+    # Удаляем тег [ТЕМА: ...]
     joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
     # Добавляем тематический эмодзи в начало
     emoji = TOPIC_EMOJI.get(topic, "😄")
     joke_text = f"{emoji} {joke_text}"
 
-    # Добавляем хэштег формата в конец (курсивом, если возможно)
-    # В Telegram размер шрифта нельзя уменьшить, но можно использовать курсив
+    # Добавляем хэштег формата в конец (курсивом)
     joke_text += f"\n\n<i>{hashtag}</i>"
 
     return joke_text, topic
@@ -167,17 +161,14 @@ def generate_joke_sync(topic):
 # ===== АСИНХРОННАЯ ПУБЛИКАЦИЯ =====
 async def publish_joke():
     """Генерирует шутку и публикует её в выбранную тему с отключенными уведомлениями."""
-    # Выбираем тему
     topic = select_topic()
     thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
 
-    # Генерируем шутку
     joke_text, topic_actual = await asyncio.to_thread(generate_joke_sync, topic)
     if not joke_text:
         logger.error("Не удалось получить шутку, пропускаем публикацию.")
         return
 
-    # Публикация в тему
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
@@ -185,6 +176,7 @@ async def publish_joke():
             message_thread_id=thread_id,
             disable_web_page_preview=True,
             disable_notification=True,
+            parse_mode='HTML',  # ← ВАЖНО: включаем HTML-разметку
         )
         logger.info(f"Опубликовано в теме '{topic_actual}' (thread_id={thread_id}) без уведомлений")
     except TelegramError as e:
@@ -199,7 +191,6 @@ async def run_scheduler():
             await publish_joke()
         except Exception as e:
             logger.exception("Непредвиденная ошибка в цикле публикаций: %s", e)
-        # Случайный интервал от 780 до 1020 секунд (13–17 минут)
         await asyncio.sleep(random.randint(780, 1020))
 
 # ===== HEALTH CHECK (HTTP-сервер) =====
@@ -233,16 +224,13 @@ def run_health_server():
 
 # ===== ЗАПУСК =====
 if __name__ == "__main__":
-    # Проверяем обязательные переменные
     if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID]):
         logger.error("Не все переменные окружения заданы (GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID).")
         exit(1)
 
-    # Запускаем health-сервер в отдельном потоке
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
 
-    # Запускаем основной планировщик через asyncio
     try:
         asyncio.run(run_scheduler())
     except KeyboardInterrupt:
