@@ -19,6 +19,12 @@ from telegram.error import TelegramError
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+PERSONAL_TOPIC_ID = os.getenv("PERSONAL_TOPIC_ID")  # можно задать вручную (ID темы)
+
+if PERSONAL_TOPIC_ID:
+    PERSONAL_TOPIC_ID = int(PERSONAL_TOPIC_ID)
+else:
+    PERSONAL_TOPIC_ID = None
 
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
@@ -57,7 +63,6 @@ HOLIDAYS = [
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
-PERSONAL_TOPIC_ID = None
 
 def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, HOLIDAYS
@@ -295,6 +300,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Привет! Используй команды:\n/referral - получить реферальную ссылку\n/personal - настроить персональный юмор")
 
 async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка команды /referral"""
     user = update.effective_user
     if update.effective_chat.type != "private":
         await update.message.reply_text("Эта команда работает только в личных сообщениях.")
@@ -315,14 +321,29 @@ async def personal_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await update.message.reply_text("Эта команда работает только в личных сообщениях.")
         return
+    
+    # Получаем текущие настройки
+    settings = get_user_settings(user.id)
+    
+    # Формируем текст с текущими настройками
+    current_settings = (
+        f"👤 Имя: {settings.get('name', 'не указано')}\n"
+        f"📂 Тематика: {settings.get('topic', 'не указана')}\n"
+        f"🎭 Формат: {settings.get('format', 'не указан')}"
+    )
+    
     keyboard = [
         [InlineKeyboardButton("👤 Имя", callback_data="set_name")],
         [InlineKeyboardButton("📂 Тематика", callback_data="set_topic")],
         [InlineKeyboardButton("🎭 Формат", callback_data="set_format")],
         [InlineKeyboardButton("✅ Получить шутку", callback_data="get_joke")],
+        [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Настройте параметры персонального юмора:", reply_markup=reply_markup)
+    await update.message.reply_text(
+        f"Настройте параметры персонального юмора:\n\n{current_settings}",
+        reply_markup=reply_markup
+    )
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -345,8 +366,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data["settings"] = settings
         save_user_data(user.id, user_data)
         await query.message.reply_text(f"Тематика: {topic}. Сохранено.")
+        # Показываем обновлённое меню
+        await personal_joke(update, context)
     elif query.data == "skip_topic":
         await query.message.reply_text("Тематика не выбрана.")
+        await personal_joke(update, context)
     elif query.data == "set_format":
         buttons = [[InlineKeyboardButton(f, callback_data=f"format_{f}")] for f in FORMATS]
         buttons.append([InlineKeyboardButton("Пропустить", callback_data="skip_format")])
@@ -357,8 +381,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data["settings"] = settings
         save_user_data(user.id, user_data)
         await query.message.reply_text(f"Формат: {format_type}. Сохранено.")
+        await personal_joke(update, context)
     elif query.data == "skip_format":
         await query.message.reply_text("Формат не выбран.")
+        await personal_joke(update, context)
+    elif query.data == "reset_settings":
+        user_data["settings"] = {}
+        save_user_data(user.id, user_data)
+        await query.message.reply_text("Настройки сброшены.")
+        await personal_joke(update, context)
     elif query.data == "get_joke":
         if not check_daily_joke_limit(user.id):
             await query.message.reply_text("Вы сегодня уже получили 10 персональных шуток. Возвращайтесь завтра!")
@@ -386,38 +417,44 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting", None)
         await personal_joke(update, context)
 
-# ===== ФУНКЦИИ ДЛЯ ТЕМЫ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
-async def setup_personal_topic():
-    """Ищет тему 'Персональный юмор' и отправляет описание с кнопкой."""
-    global PERSONAL_TOPIC_ID
+# ===== КОМАНДА ДЛЯ НАСТРОЙКИ ТЕМЫ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
+async def setup_personal_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /setup_personal_topic для администратора: указать ID темы."""
+    user = update.effective_user
+    if user.id != int(os.getenv("ADMIN_USER_ID", 0)):  # замените на ваш ID
+        await update.message.reply_text("Команда доступна только администратору.")
+        return
+    if not context.args:
+        await update.message.reply_text("Укажите ID темы, например: /setup_personal_topic 123")
+        return
     try:
-        # Попытка получить темы; если метод недоступен, пропускаем
-        if hasattr(bot, 'get_forum_topics'):
-            topics = await bot.get_forum_topics(chat_id=CHAT_ID)
-            for topic in topics.topics:
-                if "персональный юмор" in topic.name.lower():
-                    PERSONAL_TOPIC_ID = topic.message_thread_id
-                    logger.info(f"Найдена тема 'Персональный юмор': {PERSONAL_TOPIC_ID}")
-                    break
-        else:
-            logger.warning("Метод get_forum_topics недоступен, пропускаем поиск темы.")
-        
-        if not PERSONAL_TOPIC_ID:
-            logger.warning("Тема 'Персональный юмор' не найдена")
-            return
-        
-        # Если описание ещё не отправляли
-        if not data.get("personal_topic_description_sent"):
-            text = ("Здесь вы можете получить персональный юмор!\n\n"
-                    "Нажмите кнопку ниже, чтобы настроить и получить уникальную шутку.")
-            keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{bot.username}?start=personal")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await bot.send_message(chat_id=CHAT_ID, text=text, message_thread_id=PERSONAL_TOPIC_ID, reply_markup=reply_markup)
-            data["personal_topic_description_sent"] = True
-            save_data(data)
-            logger.info("Описание темы 'Персональный юмор' отправлено")
+        topic_id = int(context.args[0])
+        global PERSONAL_TOPIC_ID
+        PERSONAL_TOPIC_ID = topic_id
+        # Сохраняем в data.json
+        data["personal_topic_id"] = topic_id
+        save_data(data)
+        await update.message.reply_text(f"ID темы установлен: {topic_id}")
+    except ValueError:
+        await update.message.reply_text("Некорректный ID. Укажите число.")
+
+async def send_personal_topic_description():
+    """Отправляет описание в тему «Персональный юмор», если возможно."""
+    if not PERSONAL_TOPIC_ID:
+        return
+    if data.get("personal_topic_description_sent"):
+        return
+    text = ("Здесь вы можете получить персональный юмор!\n\n"
+            "Нажмите кнопку ниже, чтобы настроить и получить уникальную шутку.")
+    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{bot.username}?start=personal")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=text, message_thread_id=PERSONAL_TOPIC_ID, reply_markup=reply_markup)
+        data["personal_topic_description_sent"] = True
+        save_data(data)
+        logger.info("Описание темы 'Персональный юмор' отправлено")
     except Exception as e:
-        logger.error(f"Ошибка настройки темы: {e}")
+        logger.error(f"Ошибка отправки описания: {e}")
 
 # ===== HEALTH CHECK =====
 class HealthHandler(BaseHTTPRequestHandler):
@@ -450,10 +487,18 @@ async def main():
     try:
         threading.Thread(target=run_health_server, daemon=True).start()
         
+        # Если PERSONAL_TOPIC_ID не задан через переменную окружения, пробуем взять из data
+        global PERSONAL_TOPIC_ID
+        if not PERSONAL_TOPIC_ID:
+            PERSONAL_TOPIC_ID = data.get("personal_topic_id")
+        if PERSONAL_TOPIC_ID:
+            await send_personal_topic_description()
+        
         # Регистрируем обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("referral", referral))
         application.add_handler(CommandHandler("personal", personal_joke))
+        application.add_handler(CommandHandler("setup_personal_topic", setup_personal_topic))
         application.add_handler(CallbackQueryHandler(callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
@@ -464,7 +509,6 @@ async def main():
         
         # Создаём фоновые задачи
         asyncio.create_task(scheduler())
-        asyncio.create_task(setup_personal_topic())
         
         # Ожидаем вечно
         await asyncio.Event().wait()
