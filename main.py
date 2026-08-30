@@ -130,7 +130,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.effective_chat.type == "private":
         text = ("Привет! Чтобы получить 'персональный юмор' нужно быть участником этой группы "
-                "и пригласить в эту группу нового пользователя.")
+                "https://t.me/ai_umor_24 и пригласить в эту группу нового пользователя.")
         keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
         user_data = get_user_data(user.id)
         if user_data.get("has_invited"):
@@ -274,17 +274,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting") == "name":
         user = update.effective_user
         text = update.message.text.strip()
+        user_data = get_user_data(user.id)
+        # Используем setdefault для создания settings, если его нет
+        user_data.setdefault("settings", {})["name"] = text if text.lower() != "пропустить" else ""
+        save_user_data(user.id, user_data)
         if text.lower() != "пропустить":
-            user_data = get_user_data(user.id)
-            user_data["settings"]["name"] = text
-            save_user_data(user.id, user_data)
             await update.message.reply_text(f"Имя сохранено: {text}")
         else:
             await update.message.reply_text("Имя не сохранено.")
         context.user_data.pop("awaiting", None)
         original_message_id = context.user_data.pop("original_message_id", None)
         if original_message_id:
-            settings = get_user_data(user.id).get("settings", {})
+            settings = user_data.get("settings", {})
             current = (
                 f"👤 Имя: {settings.get('name', 'не указано')}\n"
                 f"📂 Тематика: {settings.get('topic', 'не указана')}\n"
@@ -328,6 +329,7 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                         text="🎉 Ваш друг вступил в группу! Теперь вы можете получить персональный юмор.",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Получить персональный юмор", callback_data="get_joke")]])
                     )
+                    logger.info(f"Уведомление отправлено пригласившему {inviter_id}")
                 except Exception as e:
                     logger.error(f"Ошибка уведомления пригласившего: {e}")
 
