@@ -11,7 +11,7 @@ import threading
 import groq
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ChatMemberHandler
-from telegram.error import TelegramError
+from telegram.error import TelegramError, BadRequest
 
 # ===== НАСТРОЙКИ =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -155,7 +155,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка edit_message_text: {e}", exc_info=True)
             return
-        # Используем BOT_USERNAME (инициализирован при старте)
         if not BOT_USERNAME:
             logger.error("BOT_USERNAME не установлен!")
             BOT_USERNAME_FALLBACK = os.getenv("BOT_USERNAME", "ai_umor_24")
@@ -217,7 +216,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type, settings)
         if joke:
             await query.message.reply_text(joke)
-            await personal_joke_from_callback(update, context)
+            # Возвращаем меню, но игнорируем ошибку "Message is not modified"
+            try:
+                await personal_joke_from_callback(update, context)
+            except BadRequest as e:
+                if "Message is not modified" not in str(e):
+                    logger.error(f"Ошибка при возврате меню: {e}")
         else:
             await query.edit_message_text("Не удалось сгенерировать шутку, попробуйте позже.")
 
@@ -238,10 +242,14 @@ async def personal_joke_from_callback(update: Update, context: ContextTypes.DEFA
         [InlineKeyboardButton("✅ Получить юмор", callback_data="confirm_get_joke")],
         [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
     ]
-    await query.edit_message_text(
-        f"Настройте параметры персонального юмора:\n\n{current}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    try:
+        await query.edit_message_text(
+            f"Настройте параметры персонального юмора:\n\n{current}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            logger.error(f"Ошибка при редактировании меню: {e}")
 
 async def personal_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -275,7 +283,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         text = update.message.text.strip()
         user_data = get_user_data(user.id)
-        # Используем setdefault для создания settings, если его нет
         user_data.setdefault("settings", {})["name"] = text if text.lower() != "пропустить" else ""
         save_user_data(user.id, user_data)
         if text.lower() != "пропустить":
@@ -298,12 +305,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("✅ Получить юмор", callback_data="confirm_get_joke")],
                 [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
             ]
-            await bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=original_message_id,
-                text=f"Настройте параметры персонального юмора:\n\n{current}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=original_message_id,
+                    text=f"Настройте параметры персонального юмора:\n\n{current}",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except BadRequest as e:
+                if "Message is not modified" not in str(e):
+                    logger.error(f"Ошибка при редактировании меню: {e}")
         else:
             await personal_joke(update, context)
 
@@ -313,9 +324,7 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     old_chat_member = update.chat_member.old_chat_member
     user = new_chat_member.user
 
-    # Если пользователь стал участником (или администратором/создателем)
     if new_chat_member.status in ("member", "administrator", "creator") and old_chat_member.status not in ("member", "administrator", "creator"):
-        # Проверяем, был ли он приглашён по реферальной ссылке
         invite_data = data.get("invites", {}).get(str(user.id))
         if invite_data:
             inviter_id = invite_data.get("ref_by")
@@ -333,7 +342,6 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception as e:
                     logger.error(f"Ошибка уведомления пригласившего: {e}")
 
-        # Отправляем новому участнику сообщение о возможности приглашать
         try:
             text = "Добро пожаловать в группу! Теперь вы можете приглашать друзей и получать персональный юмор."
             keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
@@ -341,6 +349,36 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.info(f"Отправлено приветствие новому участнику {user.id}")
         except Exception as e:
             logger.error(f"Ошибка отправки приветствия: {e}")
+
+# ===== ПЛАНИРОВЩИК ПУБЛИКАЦИЙ =====
+async def publish_joke():
+    """Генерирует и публикует шутку в группу."""
+    topic = random.choice(list(TOPIC_IDS.keys()))
+    thread_id = TOPIC_IDS[topic]
+    joke_text = await asyncio.to_thread(generate_joke_sync, topic)
+    if joke_text:
+        try:
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=joke_text,
+                message_thread_id=thread_id,
+                disable_web_page_preview=True,
+                disable_notification=True,
+                parse_mode='HTML'
+            )
+            logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id})")
+        except TelegramError as e:
+            logger.error(f"Ошибка публикации: {e}")
+
+async def scheduler():
+    """Бесконечный цикл публикаций каждые 13-17 минут."""
+    logger.info("Планировщик запущен.")
+    while True:
+        try:
+            await publish_joke()
+        except Exception as e:
+            logger.exception("Ошибка в планировщике: %s", e)
+        await asyncio.sleep(random.randint(780, 1020))
 
 # ===== HEALTH CHECK =====
 class HealthHandler(BaseHTTPRequestHandler):
@@ -365,7 +403,6 @@ async def main():
     global BOT_USERNAME
     threading.Thread(target=run_health_server, daemon=True).start()
     
-    # Инициализируем бота и получаем username
     await bot.initialize()
     me = await bot.get_me()
     BOT_USERNAME = me.username
@@ -381,6 +418,8 @@ async def main():
     await application.start()
     # Ждём 5 секунд, чтобы старый процесс завершился
     await asyncio.sleep(5)
+    # Запускаем планировщик как фоновую задачу
+    asyncio.create_task(scheduler())
     await application.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query", "chat_member"])
     await asyncio.Event().wait()
 
