@@ -16,14 +16,17 @@ from telegram.error import TelegramError, BadRequest
 # ===== НАСТРОЙКИ =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # ID супергруппы
+CHAT_ID = os.getenv("CHAT_ID")
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 PERSONAL_TOPIC_ID = os.getenv("PERSONAL_TOPIC_ID")
-
 if PERSONAL_TOPIC_ID:
     PERSONAL_TOPIC_ID = int(PERSONAL_TOPIC_ID)
 else:
     PERSONAL_TOPIC_ID = None
+
+# Лимиты
+MAX_INVITES_PER_DAY = 10
+MAX_PERSONAL_JOKES_PER_DAY = 10
 
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
@@ -97,6 +100,26 @@ async def check_is_member(user_id):
         logger.error(f"Ошибка проверки членства: {e}")
         return False
 
+def check_daily_joke_limit(user_id):
+    """Проверяет, не превысил ли пользователь дневной лимит персональных шуток."""
+    today = date.today().isoformat()
+    user_data = get_user_data(user_id)
+    if user_data.get("last_joke_date") != today:
+        user_data["jokes_today"] = 0
+        user_data["last_joke_date"] = today
+        save_user_data(user_id, user_data)
+    return user_data.get("jokes_today", 0) < MAX_PERSONAL_JOKES_PER_DAY
+
+def increment_joke_count(user_id):
+    """Увеличивает счётчик персональных шуток для пользователя."""
+    today = date.today().isoformat()
+    user_data = get_user_data(user_id)
+    if user_data.get("last_joke_date") != today:
+        user_data["jokes_today"] = 0
+        user_data["last_joke_date"] = today
+    user_data["jokes_today"] = user_data.get("jokes_today", 0) + 1
+    save_user_data(user_id, user_data)
+
 def generate_joke_sync(topic, format_type=None, user_settings=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
@@ -122,7 +145,6 @@ def generate_joke_sync(topic, format_type=None, user_settings=None):
         joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
         joke_text = joke_text.strip()
         emoji = TOPIC_EMOJI.get(topic, "😄")
-        # Если хэштег не был добавлен моделью, добавляем вручную
         if hashtag and hashtag not in joke_text:
             joke_text += f"\n\n<i>{hashtag}</i>"
         return f"{emoji} {joke_text}"
@@ -132,7 +154,6 @@ def generate_joke_sync(topic, format_type=None, user_settings=None):
 
 # ===== ОТПРАВКА ОПИСАНИЯ В ТЕМУ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
 async def send_personal_topic_description():
-    """Отправляет описание темы «Персональный юмор», если ID задан и описание ещё не отправлялось."""
     if not PERSONAL_TOPIC_ID:
         logger.warning("PERSONAL_TOPIC_ID не задан, пропускаем отправку описания.")
         return
@@ -205,12 +226,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "invite_contact":
         logger.info("Обработка invite_contact")
         if not await check_is_member(user.id):
-            logger.warning("Пользователь не участник, отправляем сообщение")
-            try:
-                await query.edit_message_text("Для начала нужно быть участником этой группы. Вступите в группу, а затем повторите попытку.")
-                logger.info("Сообщение об ошибке отправлено")
-            except Exception as e:
-                logger.error(f"Ошибка edit_message_text: {e}", exc_info=True)
+            # Ссылка на группу в сообщении
+            await query.edit_message_text(
+                "Для начала нужно быть участником этой группы: https://t.me/ai_umor_24\n"
+                "Вступите в группу, а затем повторите попытку."
+            )
             return
         if not BOT_USERNAME:
             logger.error("BOT_USERNAME не установлен!")
@@ -265,6 +285,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_user_data(user.id, user_data)
         await personal_joke_from_callback(update, context)
     elif query.data == "confirm_get_joke":
+        # Проверяем лимит
+        if not check_daily_joke_limit(user.id):
+            await query.edit_message_text("Вы сегодня уже получили 10 персональных шуток. Лимит исчерпан. Возвращайтесь завтра!")
+            return
         if not user_data.get("has_invited"):
             await query.edit_message_text("Вы ещё не пригласили друга. Сначала пригласите и дождитесь вступления, чтобы получить персональный юмор.")
             return
@@ -272,7 +296,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         format_type = settings.get("format")
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type, settings)
         if joke:
-            # ВАЖНО: добавляем parse_mode='HTML', чтобы <i> работал
+            # Увеличиваем счётчик
+            increment_joke_count(user.id)
             await query.message.reply_text(joke, parse_mode='HTML')
             try:
                 await personal_joke_from_callback(update, context)
