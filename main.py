@@ -31,6 +31,7 @@ FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "с
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
+BOT_USERNAME = None  # будет получен при старте
 
 def load_config():
     global FORMATS, TOPIC_IDS, TOPIC_EMOJI
@@ -157,7 +158,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка edit_message_text: {e}", exc_info=True)
             return
-        ref_link = f"https://t.me/{bot.username}?start=ref_{user.id}"
+        # Используем BOT_USERNAME, а не bot.username (иначе ошибка инициализации)
+        if not BOT_USERNAME:
+            logger.error("BOT_USERNAME не установлен!")
+            # Можно использовать жестко заданный username бота из переменной окружения
+            BOT_USERNAME_FALLBACK = os.getenv("BOT_USERNAME", "ai_umor_24")
+        else:
+            BOT_USERNAME_FALLBACK = BOT_USERNAME
+        ref_link = f"https://t.me/{BOT_USERNAME_FALLBACK}?start=ref_{user.id}"
         keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора!")]]
         try:
             await query.edit_message_text(
@@ -344,12 +352,21 @@ def run_health_server():
 
 # ===== ЗАПУСК =====
 async def main():
+    global BOT_USERNAME
     threading.Thread(target=run_health_server, daemon=True).start()
+    
+    # Инициализируем бота и получаем username
+    await bot.initialize()
+    me = await bot.get_me()
+    BOT_USERNAME = me.username
+    logger.info(f"Bot username: {BOT_USERNAME}")
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("personal", personal_joke))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     application.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))
+    
     await application.initialize()
     await application.start()
     # Ждём 5 секунд, чтобы старый процесс завершился
