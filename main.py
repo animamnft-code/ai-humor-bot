@@ -391,12 +391,17 @@ async def setup_personal_topic():
     """Ищет тему 'Персональный юмор' и отправляет описание с кнопкой."""
     global PERSONAL_TOPIC_ID
     try:
-        topics = await bot.get_forum_topics(chat_id=CHAT_ID)
-        for topic in topics.topics:
-            if "персональный юмор" in topic.name.lower():
-                PERSONAL_TOPIC_ID = topic.message_thread_id
-                logger.info(f"Найдена тема 'Персональный юмор': {PERSONAL_TOPIC_ID}")
-                break
+        # Попытка получить темы; если метод недоступен, пропускаем
+        if hasattr(bot, 'get_forum_topics'):
+            topics = await bot.get_forum_topics(chat_id=CHAT_ID)
+            for topic in topics.topics:
+                if "персональный юмор" in topic.name.lower():
+                    PERSONAL_TOPIC_ID = topic.message_thread_id
+                    logger.info(f"Найдена тема 'Персональный юмор': {PERSONAL_TOPIC_ID}")
+                    break
+        else:
+            logger.warning("Метод get_forum_topics недоступен, пропускаем поиск темы.")
+        
         if not PERSONAL_TOPIC_ID:
             logger.warning("Тема 'Персональный юмор' не найдена")
             return
@@ -452,12 +457,17 @@ async def main():
         application.add_handler(CallbackQueryHandler(callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
-        # Создаём фоновые задачи (планировщик и настройка темы)
+        # Инициализируем и запускаем polling
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        # Создаём фоновые задачи
         asyncio.create_task(scheduler())
         asyncio.create_task(setup_personal_topic())
         
-        # Запускаем polling (это будет вечно, пока работает сервис)
-        await application.run_polling()
+        # Ожидаем вечно
+        await asyncio.Event().wait()
     except Exception as e:
         logger.exception("Критическая ошибка в main: %s", e)
         raise
