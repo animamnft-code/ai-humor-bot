@@ -66,7 +66,6 @@ FORMATS = [
     "диалог",
 ]
 
-# ИЗМЕНЁННЫЙ СЛОВАРЬ ХЭШТЕГОВ
 FORMAT_HASHTAGS = {
     "анекдот": "#анекдоты",
     "вопрос-ответ": "#вопрос_ответ",
@@ -136,10 +135,16 @@ def generate_joke_sync(topic):
         logger.error(f"Ошибка вызова Groq: {e}")
         return None, None
 
+    # Удаляем тег [ТЕМА: ...]
     joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
+    # Удаляем ВСЕ хэштеги, которые модель могла вставить (чтобы не было дублей)
+    joke_text = re.sub(r'#\S+', '', joke_text).strip()
+
+    # Добавляем тематический эмодзи в начало
     emoji = TOPIC_EMOJI.get(topic, "😄")
     joke_text = f"{emoji} {joke_text}"
 
+    # Добавляем наш хэштег в конец (курсивом)
     joke_text += f"\n\n<i>{hashtag}</i>"
 
     return joke_text, topic
