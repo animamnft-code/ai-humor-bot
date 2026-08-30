@@ -21,16 +21,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 TOPIC_IDS = {
-    "быт": 2,
-    "работа": 5,
-    "отношения": 12,
-    "деньги": 15,
-    "еда": 17,
-    "спорт": 19,
-    "гаджеты": 21,
-    "учёба": 23,
-    "транспорт": 25,
-    "абсурд": 27,
+    "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
+    "спорт": 19, "гаджеты": 21, "учёба": 23, "транспорт": 25, "абсурд": 27,
 }
 
 TOPIC_EMOJI = {
@@ -65,7 +57,7 @@ HOLIDAYS = [
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
-PERSONAL_TOPIC_ID = None  # будет найден при старте
+PERSONAL_TOPIC_ID = None
 
 def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, HOLIDAYS
@@ -285,7 +277,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     if args and args[0] == "personal":
-        # Пользователь пришёл из темы — сразу показываем настройки персонального юмора
         await personal_joke(update, context)
         return
     if args and args[0].startswith("ref_"):
@@ -461,7 +452,7 @@ async def main():
         await find_personal_topic()
         await send_personal_topic_description()
         
-        # Запускаем планировщик
+        # Запускаем планировщик как фоновую задачу
         asyncio.create_task(scheduler())
         
         # Регистрируем обработчики
@@ -471,11 +462,8 @@ async def main():
         application.add_handler(CallbackQueryHandler(callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
-        # Запускаем бота
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        await asyncio.Event().wait()
+        # Запускаем бота с polling (это устраняет конфликт)
+        await application.run_polling()
     except Exception as e:
         logger.exception("Критическая ошибка в main: %s", e)
         raise
