@@ -18,18 +18,48 @@ from telegram.error import TelegramError
 # ===== НАСТРОЙКИ =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # ID группы (супергруппа)
+CHAT_ID = os.getenv("CHAT_ID")  # ID супергруппы (например, -1003973808650)
 
-# ID тем (message_thread_id) - автоматически получаются из группы при старте
-TOPIC_IDS = {}
+# Статические ID тем (известны заранее)
+TOPIC_IDS = {
+    "быт": 2,
+    "работа": 5,
+    "отношения": 12,
+    "деньги": 15,
+    "еда": 17,
+    "спорт": 19,
+    "гаджеты": 21,
+    "учёба": 23,
+    "транспорт": 25,
+    "абсурд": 27,
+}
+
 TOPIC_EMOJI = {
-    "быт": "🏠", "работа": "💼", "отношения": "❤️", "деньги": "💰", "еда": "🍔",
-    "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "транспорт": "✈️", "абсурд": "🎭",
+    "быт": "🏠",
+    "работа": "💼",
+    "отношения": "❤️",
+    "деньги": "💰",
+    "еда": "🍔",
+    "спорт": "🏁",
+    "гаджеты": "💻",
+    "учёба": "📚",
+    "транспорт": "✈️",
+    "абсурд": "🎭",
 }
+
 TOPIC_WEIGHTS = {
-    "быт": 1.2, "работа": 1.1, "отношения": 1.3, "деньги": 1.0, "еда": 1.0,
-    "спорт": 0.9, "гаджеты": 1.2, "учёба": 0.85, "транспорт": 0.9, "абсурд": 1.4,
+    "быт": 1.2,
+    "работа": 1.1,
+    "отношения": 1.3,
+    "деньги": 1.0,
+    "еда": 1.0,
+    "спорт": 0.9,
+    "гаджеты": 1.2,
+    "учёба": 0.85,
+    "транспорт": 0.9,
+    "абсурд": 1.4,
 }
+
 DEFAULT_TOPIC = "быт"
 
 # Форматы юмора (хранятся в config.json, загружаются при старте)
@@ -41,9 +71,8 @@ FORMAT_MAX_TOKENS = {}
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 COOLDOWN_SECONDS = 30
-PERSONAL_JOKE_COOLDOWN = 0  # после выдачи не предлагаем, пока пользователь не попросит сам
 
-# Хайповые события (можно задать в config.json)
+# Праздники
 HOLIDAYS = [
     {"name": "Новый год", "month": 1, "day": 1},
     {"name": "День защитника Отечества", "month": 2, "day": 23},
@@ -54,7 +83,7 @@ HOLIDAYS = [
     {"name": "День знаний", "month": 9, "day": 1},
     {"name": "День народного единства", "month": 11, "day": 4},
 ]
-CURRENT_EVENTS = []  # можно заполнить вручную, например: [{"name":"Олимпиада","days":3}]
+CURRENT_EVENTS = []
 
 # ===== ФАЙЛЫ ДЛЯ ХРАНЕНИЯ ДАННЫХ =====
 DATA_FILE = "data.json"
@@ -71,13 +100,21 @@ def load_config():
             HOLIDAYS = config.get("holidays", HOLIDAYS)
             CURRENT_EVENTS = config.get("current_events", [])
     else:
-        # Значения по умолчанию, если config.json нет
         FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
         FORMAT_HASHTAGS = {
-            "анекдот": "#анекдоты", "вопрос-ответ": "#вопрос_ответ", "игра слов": "#игра_слов",
-            "смешное определение": "#смешные_определения", "диалог": "#диалоги"
+            "анекдот": "#анекдоты",
+            "вопрос-ответ": "#вопрос_ответ",
+            "игра слов": "#игра_слов",
+            "смешное определение": "#смешные_определения",
+            "диалог": "#диалоги",
         }
-        FORMAT_MAX_TOKENS = {"анекдот": 250, "вопрос-ответ": 200, "игра слов": 180, "смешное определение": 200, "диалог": 220}
+        FORMAT_MAX_TOKENS = {
+            "анекдот": 250,
+            "вопрос-ответ": 200,
+            "игра слов": 180,
+            "смешное определение": 200,
+            "диалог": 220,
+        }
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -96,7 +133,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ===== ИНИЦИАЛИЗАЦИЯ =====
 load_config()
 data = load_data()
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
@@ -104,21 +140,9 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 # ===== ФУНКЦИИ ДЛЯ АВТОПУБЛИКАЦИИ =====
-async def fetch_topic_emojis():
-    """Получает темы и их кастомные эмодзи из группы."""
-    global TOPIC_IDS
-    try:
-        topics = await bot.get_forum_topics(chat_id=CHAT_ID)
-        for topic in topics.topics:
-            thread_id = topic.message_thread_id
-            TOPIC_IDS[thread_id] = topic.name
-            if topic.icon_custom_emoji_id:
-                # сохраним ID для последующего использования в <tg-emoji>
-                # но для простоты используем стандартные эмодзи из TOPIC_EMOJI
-                pass
-        logger.info(f"Получены темы: {TOPIC_IDS}")
-    except Exception as e:
-        logger.error(f"Ошибка получения тем: {e}")
+def get_thread_id(topic):
+    """Возвращает message_thread_id по названию темы."""
+    return TOPIC_IDS.get(topic)
 
 def get_current_holiday():
     """Возвращает название праздника, если сегодня в диапазоне ±7 дней, иначе None."""
@@ -146,13 +170,11 @@ def get_holiday_bias():
     delta = (today - datetime(today.year, closest_holiday["month"], closest_holiday["day"])).days
     if delta < -7 or delta > 7:
         return 0.0
-    # Плавная кривая: -7:0.1, -6:0.15, -5:0.2, ..., -1:0.6, 0:0.7, +1:0.5, ..., +7:0.1
-    # Используем кусочно-линейную аппроксимацию
+    # Плавная кривая: -7:0.1, -6:0.15, ..., 0:0.7, ..., +7:0.1
     if delta <= 0:
-        prob = 0.7 + 0.1 * delta  # от -7:0 до 0:0.7? Нет, посчитаем
+        prob = 0.7 + 0.1 * delta  # delta отрицательное, поэтому при -7 prob=0.7-0.7=0.0? посчитаем
     else:
-        prob = 0.7 - 0.1 * delta  # от +1:0.6 до +7:0.0
-    # Ограничим
+        prob = 0.7 - 0.1 * delta
     prob = max(0.05, min(0.7, prob))
     return prob
 
@@ -162,7 +184,7 @@ def select_topic():
     return random.choices(topics, weights=weights, k=1)[0]
 
 def generate_joke_sync(topic, format_type=None, holiday=None, user_settings=None):
-    """Генерирует шутку. Если user_settings заданы, генерирует персональную."""
+    """Генерирует шутку."""
     if format_type is None:
         format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS.get(format_type, "")
@@ -290,26 +312,20 @@ def get_user_settings(user_id):
 
 # ===== ОБРАБОТЧИКИ КОМАНД И CALLBACK =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка /start с реферальной ссылкой."""
     user = update.effective_user
     args = context.args
     if args and args[0].startswith("ref_"):
         ref_user_id = int(args[0].split("_")[1])
-        # Проверяем, что реферер не сам приглашённый
         if ref_user_id != user.id:
-            # Записываем приглашение
             invite_data = data.setdefault("invites", {})
             invite_data[str(user.id)] = {"ref_by": ref_user_id, "date": datetime.now().isoformat()}
             save_data(data)
-            # Увеличиваем счётчик реферера
             if check_daily_invite_limit(ref_user_id):
                 increment_invite_count(ref_user_id)
-                # Отправляем сообщение рефереру
                 try:
                     await bot.send_message(chat_id=ref_user_id, text="🎉 Вы пригласили нового друга! Получите персональный юмор!")
                 except Exception:
                     pass
-    # Показываем приветствие, если это не группа
     if update.effective_chat.type == "private":
         await update.message.reply_text("Привет! Используй команды:\n/referral - получить реферальную ссылку\n/personal - настроить персональный юмор")
 
@@ -318,13 +334,10 @@ async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await update.message.reply_text("Эта команда работает только в личных сообщениях.")
         return
-    # Проверяем лимит на сегодня
     if not check_daily_invite_limit(user.id):
         await update.message.reply_text("Вы сегодня уже пригласили 10 друзей, возвращайтесь завтра!")
         return
-    # Генерируем ссылку
     ref_link = f"https://t.me/ai_umor_24?start=ref_{user.id}"
-    # Кнопка для приглашения контакта (Telegram позволяет отправить контакт)
     keyboard = [[InlineKeyboardButton("Пригласить контакт", switch_inline_query="")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -337,7 +350,6 @@ async def personal_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await update.message.reply_text("Эта команда работает только в личных сообщениях.")
         return
-    # Показываем настройки
     keyboard = [
         [InlineKeyboardButton("👤 Имя", callback_data="set_name")],
         [InlineKeyboardButton("📂 Тематика", callback_data="set_topic")],
@@ -356,10 +368,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "set_name":
         await query.message.reply_text("Введите ваше имя (или отправьте 'пропустить'):")
-        # Ждём ответа в следующем сообщении (обработаем в message_handler)
         context.user_data["awaiting"] = "name"
     elif query.data == "set_topic":
-        # Показываем темы
         topics = list(TOPIC_WEIGHTS.keys())
         buttons = [[InlineKeyboardButton(f"{TOPIC_EMOJI.get(t,'')} {t}", callback_data=f"topic_{t}")] for t in topics]
         buttons.append([InlineKeyboardButton("Пропустить", callback_data="skip_topic")])
@@ -398,7 +408,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("Не удалось сгенерировать шутку, попробуйте позже.")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода имени пользователя."""
     if context.user_data.get("awaiting") == "name":
         user = update.effective_user
         user_data = get_user_data(user.id)
@@ -410,7 +419,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Имя не сохранено.")
         context.user_data.pop("awaiting", None)
-        # Показываем снова меню настроек
         await personal_joke(update, context)
 
 # ===== HEALTH CHECK =====
@@ -441,23 +449,29 @@ def run_health_server():
 
 # ===== ЗАПУСК =====
 async def main():
-    # Запускаем health-сервер в отдельном потоке
-    threading.Thread(target=run_health_server, daemon=True).start()
-    # Получаем темы
-    await fetch_topic_emojis()
-    # Запускаем планировщик
-    asyncio.create_task(scheduler())
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("referral", referral))
-    application.add_handler(CommandHandler("personal", personal_joke))
-    application.add_handler(CallbackQueryHandler(callback_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    # Запускаем бота
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        # Health-сервер в отдельном потоке
+        threading.Thread(target=run_health_server, daemon=True).start()
+        # Запускаем планировщик как фоновую задачу
+        asyncio.create_task(scheduler())
+        # Регистрируем обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("referral", referral))
+        application.add_handler(CommandHandler("personal", personal_joke))
+        application.add_handler(CallbackQueryHandler(callback_handler))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        # Запускаем бота
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        # Ждём вечно
+        await asyncio.Event().wait()
+    except Exception as e:
+        logger.exception("Критическая ошибка в main: %s", e)
+        raise
 
 if __name__ == "__main__":
     if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID]):
-        logger.error("Не все переменные окружения заданы.")
+        logger.error("Не все переменные окружения заданы (GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID).")
         exit(1)
     asyncio.run(main())
