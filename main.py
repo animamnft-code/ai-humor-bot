@@ -30,18 +30,18 @@ TOPIC_IDS = {
     "абсурд": 27,
 }
 
-# ВРЕМЕННЫЕ ЭМОДЗИ (некоторые не совпадают, ждём уточнений)
+# Фолбэк-эмодзи (если не удалось получить кастомное)
 TOPIC_EMOJI = {
-    "быт": "🏠",       # может быть дом
-    "работа": "💼",    # совпадает
-    "отношения": "❤️", # совпадает
-    "деньги": "💰",    # возможно, сумка с деньгами
-    "еда": "🍔",       # совпадает на 90%
-    "спорт": "🏋️",     # возможно, гантели
-    "гаджеты": "📱",   # возможно, ноутбук
-    "учёба": "📚",     # возможно, книги
-    "транспорт": "✈️", # возможно, самолёт
-    "абсурд": "🎭",    # возможно, клоун или маска
+    "быт": "🏠",
+    "работа": "💼",
+    "отношения": "❤️",
+    "деньги": "💰",
+    "еда": "🍔",
+    "спорт": "🏁",
+    "гаджеты": "💻",
+    "учёба": "📚",
+    "транспорт": "✈️",
+    "абсурд": "🎭",
 }
 
 TOPIC_WEIGHTS = {
@@ -95,6 +95,26 @@ logger = logging.getLogger(__name__)
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
+# Словарь: thread_id -> emoji_id (заполняется при старте)
+TOPIC_EMOJI_IDS = {}
+
+# ===== ПОЛУЧЕНИЕ КАСТОМНЫХ ЭМОДЗИ ТЕМ =====
+async def fetch_topic_emojis():
+    """Запрашивает у Telegram список тем и сохраняет ID кастомных эмодзи."""
+    global TOPIC_EMOJI_IDS
+    try:
+        topics = await bot.get_forum_topics(chat_id=CHAT_ID)
+        for topic in topics.topics:
+            thread_id = topic.message_thread_id
+            emoji_id = topic.icon_custom_emoji_id
+            if emoji_id:
+                TOPIC_EMOJI_IDS[thread_id] = emoji_id
+        logger.info(f"Получены кастомные эмодзи для {len(TOPIC_EMOJI_IDS)} тем")
+    except Exception as e:
+        logger.error(f"Ошибка получения тем: {e}")
+        # Если не удалось, оставляем пустым — будут фолбэк-эмодзи
+
+# ===== ФУНКЦИЯ ПРОВЕРКИ ПРАЗДНИКА =====
 def get_current_holiday():
     today = datetime.now()
     for holiday in HOLIDAYS:
@@ -104,18 +124,18 @@ def get_current_holiday():
             return holiday["name"]
     return None
 
+# ===== ФУНКЦИЯ ВЫБОРА ТЕМЫ (взвешенный случайный выбор) =====
 def select_topic():
     topics = list(TOPIC_WEIGHTS.keys())
     weights = [TOPIC_WEIGHTS[t] for t in topics]
     return random.choices(topics, weights=weights, k=1)[0]
 
+# ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ =====
 def generate_joke_sync(topic):
     format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS[format_type]
-
     holiday = get_current_holiday()
 
-    # ПРОМПТ С ТРЕБОВАНИЕМ СТРУКТУРЫ И АБЗАЦЕВ
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
     if holiday:
         prompt += f" Приурочь его к празднику: {holiday}."
@@ -135,7 +155,7 @@ def generate_joke_sync(topic):
                 {"role": "user", "content": prompt}
             ],
             temperature=0.9,
-            max_tokens=400,  # вернули больше, чтобы сохранить длину
+            max_tokens=400,
         )
         raw_text = response.choices[0].message.content.strip()
         logger.info(f"Groq ответ: {raw_text}")
@@ -150,18 +170,28 @@ def generate_joke_sync(topic):
     # Удаляем Markdown-разметку
     joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
 
-    # Нормализуем переносы строк: не больше двух подряд
+    # Нормализуем переносы строк
     joke_text = re.sub(r'\n{3,}', '\n\n', joke_text)
 
-    # Добавляем эмодзи в начало
-    emoji = TOPIC_EMOJI.get(topic, "😄")
-    joke_text = f"{emoji} {joke_text}"
+    # Получаем thread_id для этой темы
+    thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
+
+    # Определяем эмодзи (кастомное или фолбэк)
+    emoji_id = TOPIC_EMOJI_IDS.get(thread_id)
+    if emoji_id:
+        # Используем кастомное эмодзи через <tg-emoji>
+        emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{TOPIC_EMOJI.get(topic, "😄")}</tg-emoji>'
+    else:
+        emoji_tag = TOPIC_EMOJI.get(topic, "😄")
+
+    joke_text = f"{emoji_tag} {joke_text}"
 
     # Добавляем хэштег в конец (курсивом)
     joke_text += f"\n\n<i>{hashtag}</i>"
 
     return joke_text, topic
 
+# ===== АСИНХРОННАЯ ПУБЛИКАЦИЯ =====
 async def publish_joke():
     topic = select_topic()
     thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
@@ -184,7 +214,11 @@ async def publish_joke():
     except TelegramError as e:
         logger.error(f"Ошибка публикации в тему {topic_actual}: {e}")
 
+# ===== АСИНХРОННЫЙ ПЛАНИРОВЩИК =====
 async def run_scheduler():
+    # Получаем кастомные эмодзи тем при старте
+    await fetch_topic_emojis()
+    
     logger.info("Планировщик запущен. Интервал будет случайным (13–17 минут).")
     while True:
         try:
@@ -193,6 +227,7 @@ async def run_scheduler():
             logger.exception("Непредвиденная ошибка в цикле публикаций: %s", e)
         await asyncio.sleep(random.randint(780, 1020))
 
+# ===== HEALTH CHECK (HTTP-сервер) =====
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
@@ -220,6 +255,7 @@ def run_health_server():
     logger.info("Health-сервер запущен на порту %d", port)
     server.serve_forever()
 
+# ===== ЗАПУСК =====
 if __name__ == "__main__":
     if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID]):
         logger.error("Не все переменные окружения заданы (GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID).")
