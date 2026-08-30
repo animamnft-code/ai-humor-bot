@@ -73,10 +73,10 @@ def save_user_data(user_id, user_data):
     data[str(user_id)] = user_data
     save_data(data)
 
-def check_is_member(user_id):
-    """Проверяет, является ли пользователь участником группы."""
+async def check_is_member(user_id):
+    """Проверяет, является ли пользователь участником группы (async)."""
     try:
-        member = bot.get_chat_member(chat_id=CHAT_ID, user_id=user_id)
+        member = await bot.get_chat_member(chat_id=CHAT_ID, user_id=user_id)
         return member.status in ("member", "administrator", "creator")
     except Exception as e:
         logger.error(f"Ошибка проверки членства: {e}")
@@ -131,7 +131,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = ("Привет! Чтобы получить 'персональный юмор' нужно быть участником этой группы "
                 "и пригласить в эту группу нового пользователя.")
         keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
-        # Если у пользователя уже есть право (has_invited), добавим кнопку получения юмора
         user_data = get_user_data(user.id)
         if user_data.get("has_invited"):
             keyboard.append([InlineKeyboardButton("🎁 Получить персональный юмор", callback_data="get_joke")])
@@ -146,7 +145,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Callback {query.data} from {user.id}")
 
     if query.data == "invite_contact":
-        if not check_is_member(user.id):
+        # Проверяем членство через await
+        if not await check_is_member(user.id):
             await query.edit_message_text("Для начала нужно быть участником этой группы. Вступите в группу, а затем повторите попытку.")
             return
         ref_link = f"https://t.me/{bot.username}?start=ref_{user.id}"
