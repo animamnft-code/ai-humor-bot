@@ -31,7 +31,7 @@ FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "с
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
-BOT_USERNAME = None  # будет получен при старте
+BOT_USERNAME = None
 
 def load_config():
     global FORMATS, TOPIC_IDS, TOPIC_EMOJI
@@ -77,13 +77,10 @@ def save_user_data(user_id, user_data):
 async def check_is_member(user_id):
     """Проверяет, является ли пользователь участником группы (async)."""
     try:
-        logger.info(f"Проверка членства для user_id={user_id}")
         member = await bot.get_chat_member(chat_id=CHAT_ID, user_id=user_id)
-        status = member.status
-        logger.info(f"Статус члена: {status}")
-        return status in ("member", "administrator", "creator")
+        return member.status in ("member", "administrator", "creator")
     except Exception as e:
-        logger.error(f"Ошибка проверки членства: {e}", exc_info=True)
+        logger.error(f"Ошибка проверки членства: {e}")
         return False
 
 def generate_joke_sync(topic, format_type=None, user_settings=None):
@@ -158,10 +155,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка edit_message_text: {e}", exc_info=True)
             return
-        # Используем BOT_USERNAME, а не bot.username (иначе ошибка инициализации)
+        # Используем BOT_USERNAME (инициализирован при старте)
         if not BOT_USERNAME:
             logger.error("BOT_USERNAME не установлен!")
-            # Можно использовать жестко заданный username бота из переменной окружения
             BOT_USERNAME_FALLBACK = os.getenv("BOT_USERNAME", "ai_umor_24")
         else:
             BOT_USERNAME_FALLBACK = BOT_USERNAME
@@ -248,7 +244,6 @@ async def personal_joke_from_callback(update: Update, context: ContextTypes.DEFA
     )
 
 async def personal_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Команда /personal
     user = update.effective_user
     if update.effective_chat.type != "private":
         await update.message.reply_text("Эта команда работает только в личных сообщениях.")
@@ -312,10 +307,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await personal_joke(update, context)
 
 async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    new_member = update.chat_member.new_chat_member
-    old_member = update.chat_member.old_chat_member
-    user = new_member.user
-    if new_member.status in ("member", "administrator", "creator") and old_member.status not in ("member", "administrator", "creator"):
+    """Обработка изменения статуса участника группы."""
+    new_chat_member = update.chat_member.new_chat_member
+    old_chat_member = update.chat_member.old_chat_member
+    user = new_chat_member.user
+
+    # Если пользователь стал участником (или администратором/создателем)
+    if new_chat_member.status in ("member", "administrator", "creator") and old_chat_member.status not in ("member", "administrator", "creator"):
+        # Проверяем, был ли он приглашён по реферальной ссылке
         invite_data = data.get("invites", {}).get(str(user.id))
         if invite_data:
             inviter_id = invite_data.get("ref_by")
@@ -331,6 +330,15 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     )
                 except Exception as e:
                     logger.error(f"Ошибка уведомления пригласившего: {e}")
+
+        # Отправляем новому участнику сообщение о возможности приглашать
+        try:
+            text = "Добро пожаловать в группу! Теперь вы можете приглашать друзей и получать персональный юмор."
+            keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
+            await bot.send_message(chat_id=user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+            logger.info(f"Отправлено приветствие новому участнику {user.id}")
+        except Exception as e:
+            logger.error(f"Ошибка отправки приветствия: {e}")
 
 # ===== HEALTH CHECK =====
 class HealthHandler(BaseHTTPRequestHandler):
