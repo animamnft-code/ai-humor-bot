@@ -302,11 +302,11 @@ async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_daily_invite_limit(user.id):
         await update.message.reply_text("Вы сегодня уже пригласили 10 друзей, возвращайтесь завтра!")
         return
-    ref_link = f"https://t.me/ai_umor_24?start=ref_{user.id}"
-    keyboard = [[InlineKeyboardButton("Пригласить контакт", switch_inline_query="")]]
+    ref_link = f"https://t.me/{bot.username}?start=ref_{user.id}"
+    keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора!")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"Ваша реферальная ссылка:\n{ref_link}\n\nОтправьте её другу или используйте кнопку ниже.",
+        f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
         reply_markup=reply_markup
     )
 
@@ -448,13 +448,6 @@ async def main():
     try:
         threading.Thread(target=run_health_server, daemon=True).start()
         
-        # Находим тему «Персональный юмор» и отправляем описание
-        await find_personal_topic()
-        await send_personal_topic_description()
-        
-        # Запускаем планировщик как фоновую задачу
-        asyncio.create_task(scheduler())
-        
         # Регистрируем обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("referral", referral))
@@ -462,8 +455,21 @@ async def main():
         application.add_handler(CallbackQueryHandler(callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
-        # Запускаем бота с polling (это устраняет конфликт)
-        await application.run_polling()
+        # Запускаем планировщик как фоновую задачу
+        asyncio.create_task(scheduler())
+        
+        # Запускаем polling в фоновой задаче
+        polling_task = asyncio.create_task(application.run_polling())
+        
+        # Даём боту немного времени на старт
+        await asyncio.sleep(2)
+        
+        # Выполняем настройку темы
+        await find_personal_topic()
+        await send_personal_topic_description()
+        
+        # Ожидаем завершения polling (это будет вечно, пока бот работает)
+        await polling_task
     except Exception as e:
         logger.exception("Критическая ошибка в main: %s", e)
         raise
