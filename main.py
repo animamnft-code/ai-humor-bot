@@ -18,6 +18,12 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")  # ID супергруппы
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+PERSONAL_TOPIC_ID = os.getenv("PERSONAL_TOPIC_ID")
+
+if PERSONAL_TOPIC_ID:
+    PERSONAL_TOPIC_ID = int(PERSONAL_TOPIC_ID)
+else:
+    PERSONAL_TOPIC_ID = None
 
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
@@ -56,7 +62,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"invites": {}, "user_settings": {}, "has_invited": {}}
+    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -123,6 +129,45 @@ def generate_joke_sync(topic, format_type=None, user_settings=None):
     except Exception as e:
         logger.error(f"Ошибка генерации: {e}")
         return None
+
+# ===== ОТПРАВКА ОПИСАНИЯ В ТЕМУ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
+async def send_personal_topic_description():
+    """Отправляет описание темы «Персональный юмор», если ID задан и описание ещё не отправлялось."""
+    if not PERSONAL_TOPIC_ID:
+        logger.warning("PERSONAL_TOPIC_ID не задан, пропускаем отправку описания.")
+        return
+    if data.get("personal_topic_description_sent"):
+        return
+
+    text = (
+        "🎭 Добро пожаловать в тему «Персональный юмор»!\n\n"
+        "Здесь вы можете получить уникальную шутку, созданную специально для вас.\n\n"
+        "🎁 Как получить персональный юмор?\n"
+        "1. Вступите в нашу группу: https://t.me/ai_umor_24\n"
+        "2. Пригласите в неё одного друга.\n"
+        "3. Нажмите кнопку ниже, чтобы настроить параметры и получить шутку.\n\n"
+        "⚠️ Без участия в группе и приглашения друга получить персональный юмор невозможно.\n\n"
+        "Присоединяйтесь и смейтесь вместе с нами! 😄"
+    )
+
+    if not BOT_USERNAME:
+        logger.error("BOT_USERNAME не установлен!")
+        return
+    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{BOT_USERNAME}?start=personal")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=text,
+            message_thread_id=PERSONAL_TOPIC_ID,
+            reply_markup=reply_markup
+        )
+        data["personal_topic_description_sent"] = True
+        save_data(data)
+        logger.info("Описание темы «Персональный юмор» отправлено")
+    except Exception as e:
+        logger.error(f"Ошибка отправки описания: {e}")
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,7 +272,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         format_type = settings.get("format")
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type, settings)
         if joke:
-            await query.message.reply_text(joke)
+            # ВАЖНО: добавляем parse_mode='HTML', чтобы <i> работал
+            await query.message.reply_text(joke, parse_mode='HTML')
             try:
                 await personal_joke_from_callback(update, context)
             except BadRequest as e:
@@ -427,8 +473,12 @@ async def main():
     
     await application.initialize()
     await application.start()
-    # Ждём 5 секунд, чтобы старый процесс завершился
-    await asyncio.sleep(5)
+    
+    # Отправляем описание в тему «Персональный юмор», если задан ID
+    await send_personal_topic_description()
+    
+    # Ждём 10 секунд для завершения старого процесса
+    await asyncio.sleep(10)
     # Запускаем планировщик как фоновую задачу
     asyncio.create_task(scheduler())
     await application.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query", "chat_member"])
