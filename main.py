@@ -76,10 +76,13 @@ def save_user_data(user_id, user_data):
 async def check_is_member(user_id):
     """Проверяет, является ли пользователь участником группы (async)."""
     try:
+        logger.info(f"Проверка членства для user_id={user_id}")
         member = await bot.get_chat_member(chat_id=CHAT_ID, user_id=user_id)
-        return member.status in ("member", "administrator", "creator")
+        status = member.status
+        logger.info(f"Статус члена: {status}")
+        return status in ("member", "administrator", "creator")
     except Exception as e:
-        logger.error(f"Ошибка проверки членства: {e}")
+        logger.error(f"Ошибка проверки членства: {e}", exc_info=True)
         return False
 
 def generate_joke_sync(topic, format_type=None, user_settings=None):
@@ -145,16 +148,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Callback {query.data} from {user.id}")
 
     if query.data == "invite_contact":
-        # Проверяем членство через await
+        logger.info("Обработка invite_contact")
         if not await check_is_member(user.id):
-            await query.edit_message_text("Для начала нужно быть участником этой группы. Вступите в группу, а затем повторите попытку.")
+            logger.warning("Пользователь не участник, отправляем сообщение")
+            try:
+                await query.edit_message_text("Для начала нужно быть участником этой группы. Вступите в группу, а затем повторите попытку.")
+                logger.info("Сообщение об ошибке отправлено")
+            except Exception as e:
+                logger.error(f"Ошибка edit_message_text: {e}", exc_info=True)
             return
         ref_link = f"https://t.me/{bot.username}?start=ref_{user.id}"
         keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора!")]]
-        await query.edit_message_text(
-            "Отправьте приглашение другу. После того как он вступит в группу, вы сможете получить персональный юмор.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        try:
+            await query.edit_message_text(
+                "Отправьте приглашение другу. После того как он вступит в группу, вы сможете получить персональный юмор.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            logger.info("Кнопка отправки другу показана")
+        except Exception as e:
+            logger.error(f"Ошибка при показе кнопки: {e}", exc_info=True)
     elif query.data == "get_joke":
         await personal_joke_from_callback(update, context)
     elif query.data == "set_name":
