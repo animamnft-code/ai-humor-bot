@@ -117,13 +117,13 @@ def generate_joke_sync(topic):
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
     if holiday:
         prompt += f" Приурочь его к празднику: {holiday}."
-    prompt += " В конце добавь тег [ТЕМА: {topic}] и хэштег " + hashtag + "."
+    prompt += " Не используй Markdown, HTML-теги или специальные символы форматирования. Только обычный текст. В конце добавь тег [ТЕМА: {topic}] и хэштег " + hashtag + "."
 
     try:
         response = groq_client.chat.completions.create(
             model="qwen/qwen3.8-27b",
             messages=[
-                {"role": "system", "content": "Ты - генератор юмора."},
+                {"role": "system", "content": "Ты - генератор юмора. Пиши только обычным текстом, без разметки."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.9,
@@ -137,8 +137,10 @@ def generate_joke_sync(topic):
 
     # Удаляем тег [ТЕМА: ...]
     joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
-    # Удаляем ВСЕ хэштеги, которые модель могла вставить (чтобы не было дублей)
+    # Удаляем все хэштеги, которые модель могла вставить
     joke_text = re.sub(r'#\S+', '', joke_text).strip()
+    # Удаляем Markdown-разметку (**жирный**, *курсив*, __подчёркнутый__)
+    joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
 
     # Добавляем тематический эмодзи в начало
     emoji = TOPIC_EMOJI.get(topic, "😄")
