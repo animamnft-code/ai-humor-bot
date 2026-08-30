@@ -15,9 +15,8 @@ from telegram.error import TelegramError
 # ===== НАСТРОЙКИ =====
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # например, -1003973808650
+CHAT_ID = os.getenv("CHAT_ID")
 
-# ID тем (message_thread_id) - замените, если отличаются
 TOPIC_IDS = {
     "быт": 2,
     "работа": 5,
@@ -31,7 +30,6 @@ TOPIC_IDS = {
     "абсурд": 27,
 }
 
-# Эмодзи для каждой темы (временные, позже можно заменить)
 TOPIC_EMOJI = {
     "быт": "🏠",
     "работа": "💼",
@@ -45,7 +43,6 @@ TOPIC_EMOJI = {
     "абсурд": "🔮",
 }
 
-# Веса тем (больше вес – чаще публикуется)
 TOPIC_WEIGHTS = {
     "быт": 1.2,
     "работа": 1.1,
@@ -61,7 +58,6 @@ TOPIC_WEIGHTS = {
 
 DEFAULT_TOPIC = "быт"
 
-# Форматы юмора
 FORMATS = [
     "анекдот",
     "вопрос-ответ",
@@ -69,15 +65,16 @@ FORMATS = [
     "смешное определение",
     "диалог",
 ]
+
+# ИЗМЕНЁННЫЙ СЛОВАРЬ ХЭШТЕГОВ
 FORMAT_HASHTAGS = {
     "анекдот": "#анекдоты",
-    "вопрос-ответ": "#вопрос-ответ",
-    "игра слов": "#играслов",
-    "смешное определение": "#смешныеопределения",
+    "вопрос-ответ": "#вопрос_ответ",
+    "игра слов": "#игра_слов",
+    "смешное определение": "#смешные_определения",
     "диалог": "#диалоги",
 }
 
-# Российские праздники (без религиозных)
 HOLIDAYS = [
     {"name": "Новый год", "month": 1, "day": 1},
     {"name": "День защитника Отечества", "month": 2, "day": 23},
@@ -89,20 +86,16 @@ HOLIDAYS = [
     {"name": "День народного единства", "month": 11, "day": 4},
 ]
 
-# ===== ЛОГИРОВАНИЕ =====
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# ===== ИНИЦИАЛИЗАЦИЯ КЛИЕНТОВ =====
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ===== ФУНКЦИЯ ПРОВЕРКИ ПРАЗДНИКА =====
 def get_current_holiday():
-    """Возвращает название праздника, если сегодня в диапазоне ±7 дней, иначе None."""
     today = datetime.now()
     for holiday in HOLIDAYS:
         holiday_date = datetime(today.year, holiday["month"], holiday["day"])
@@ -111,16 +104,12 @@ def get_current_holiday():
             return holiday["name"]
     return None
 
-# ===== ФУНКЦИЯ ВЫБОРА ТЕМЫ (взвешенный случайный выбор) =====
 def select_topic():
-    """Выбирает тему с учётом весов."""
     topics = list(TOPIC_WEIGHTS.keys())
     weights = [TOPIC_WEIGHTS[t] for t in topics]
     return random.choices(topics, weights=weights, k=1)[0]
 
-# ===== ФУНКЦИЯ ГЕНЕРАЦИИ ШУТКИ =====
 def generate_joke_sync(topic):
-    """Запрашивает шутку у Groq с учётом формата и праздника."""
     format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS[format_type]
 
@@ -147,20 +136,15 @@ def generate_joke_sync(topic):
         logger.error(f"Ошибка вызова Groq: {e}")
         return None, None
 
-    # Удаляем тег [ТЕМА: ...]
     joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw_text, flags=re.IGNORECASE).strip()
-    # Добавляем тематический эмодзи в начало
     emoji = TOPIC_EMOJI.get(topic, "😄")
     joke_text = f"{emoji} {joke_text}"
 
-    # Добавляем хэштег формата в конец (курсивом)
     joke_text += f"\n\n<i>{hashtag}</i>"
 
     return joke_text, topic
 
-# ===== АСИНХРОННАЯ ПУБЛИКАЦИЯ =====
 async def publish_joke():
-    """Генерирует шутку и публикует её в выбранную тему с отключенными уведомлениями."""
     topic = select_topic()
     thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[DEFAULT_TOPIC])
 
@@ -176,15 +160,13 @@ async def publish_joke():
             message_thread_id=thread_id,
             disable_web_page_preview=True,
             disable_notification=True,
-            parse_mode='HTML',  # ← ВАЖНО: включаем HTML-разметку
+            parse_mode='HTML',
         )
         logger.info(f"Опубликовано в теме '{topic_actual}' (thread_id={thread_id}) без уведомлений")
     except TelegramError as e:
         logger.error(f"Ошибка публикации в тему {topic_actual}: {e}")
 
-# ===== АСИНХРОННЫЙ ПЛАНИРОВЩИК =====
 async def run_scheduler():
-    """Бесконечный цикл публикаций со случайным интервалом."""
     logger.info("Планировщик запущен. Интервал будет случайным (13–17 минут).")
     while True:
         try:
@@ -193,7 +175,6 @@ async def run_scheduler():
             logger.exception("Непредвиденная ошибка в цикле публикаций: %s", e)
         await asyncio.sleep(random.randint(780, 1020))
 
-# ===== HEALTH CHECK (HTTP-сервер) =====
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
@@ -216,13 +197,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         logger.debug("Health check: %s", format % args)
 
 def run_health_server():
-    """Запускает HTTP-сервер для проверки живости (Render)."""
     port = int(os.getenv("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     logger.info("Health-сервер запущен на порту %d", port)
     server.serve_forever()
 
-# ===== ЗАПУСК =====
 if __name__ == "__main__":
     if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID]):
         logger.error("Не все переменные окружения заданы (GROQ_API_KEY, TELEGRAM_BOT_TOKEN, CHAT_ID).")
