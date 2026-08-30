@@ -386,8 +386,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting", None)
         await personal_joke(update, context)
 
-# ===== НОВЫЕ ФУНКЦИИ ДЛЯ ТЕМЫ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
-async def find_personal_topic():
+# ===== ФУНКЦИИ ДЛЯ ТЕМЫ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
+async def setup_personal_topic():
+    """Ищет тему 'Персональный юмор' и отправляет описание с кнопкой."""
     global PERSONAL_TOPIC_ID
     try:
         topics = await bot.get_forum_topics(chat_id=CHAT_ID)
@@ -395,27 +396,23 @@ async def find_personal_topic():
             if "персональный юмор" in topic.name.lower():
                 PERSONAL_TOPIC_ID = topic.message_thread_id
                 logger.info(f"Найдена тема 'Персональный юмор': {PERSONAL_TOPIC_ID}")
-                return
-        logger.warning("Тема 'Персональный юмор' не найдена")
+                break
+        if not PERSONAL_TOPIC_ID:
+            logger.warning("Тема 'Персональный юмор' не найдена")
+            return
+        
+        # Если описание ещё не отправляли
+        if not data.get("personal_topic_description_sent"):
+            text = ("Здесь вы можете получить персональный юмор!\n\n"
+                    "Нажмите кнопку ниже, чтобы настроить и получить уникальную шутку.")
+            keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{bot.username}?start=personal")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await bot.send_message(chat_id=CHAT_ID, text=text, message_thread_id=PERSONAL_TOPIC_ID, reply_markup=reply_markup)
+            data["personal_topic_description_sent"] = True
+            save_data(data)
+            logger.info("Описание темы 'Персональный юмор' отправлено")
     except Exception as e:
-        logger.error(f"Ошибка при поиске темы: {e}")
-
-async def send_personal_topic_description():
-    if not PERSONAL_TOPIC_ID:
-        return
-    if data.get("personal_topic_description_sent"):
-        return
-    text = ("Здесь вы можете получить персональный юмор!\n\n"
-            "Нажмите кнопку ниже, чтобы настроить и получить уникальную шутку.")
-    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{bot.username}?start=personal")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=text, message_thread_id=PERSONAL_TOPIC_ID, reply_markup=reply_markup)
-        data["personal_topic_description_sent"] = True
-        save_data(data)
-        logger.info("Описание темы 'Персональный юмор' отправлено")
-    except Exception as e:
-        logger.error(f"Ошибка отправки описания: {e}")
+        logger.error(f"Ошибка настройки темы: {e}")
 
 # ===== HEALTH CHECK =====
 class HealthHandler(BaseHTTPRequestHandler):
@@ -455,21 +452,12 @@ async def main():
         application.add_handler(CallbackQueryHandler(callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
-        # Запускаем планировщик как фоновую задачу
+        # Создаём фоновые задачи (планировщик и настройка темы)
         asyncio.create_task(scheduler())
+        asyncio.create_task(setup_personal_topic())
         
-        # Запускаем polling в фоновой задаче
-        polling_task = asyncio.create_task(application.run_polling())
-        
-        # Даём боту немного времени на старт
-        await asyncio.sleep(2)
-        
-        # Выполняем настройку темы
-        await find_personal_topic()
-        await send_personal_topic_description()
-        
-        # Ожидаем завершения polling (это будет вечно, пока бот работает)
-        await polling_task
+        # Запускаем polling (это будет вечно, пока работает сервис)
+        await application.run_polling()
     except Exception as e:
         logger.exception("Критическая ошибка в main: %s", e)
         raise
