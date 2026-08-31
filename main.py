@@ -224,20 +224,46 @@ async def send_personal_topic_description():
         return
 
     text = (
-        "🎭 Добро пожаловать в тему «Персональный юмор»!\n\n"
-        "Здесь вы можете получить уникальную шутку, созданную специально для вас.\n\n"
-        "🎁 Как получить персональный юмор?\n"
-        "1. Вступите в нашу группу: https://t.me/ai_umor_24\n"
-        "2. Пригласите в неё одного друга.\n"
-        "3. Нажмите кнопку ниже, чтобы настроить параметры и получить шутку.\n\n"
-        "⚠️ Без участия в группе и приглашения друга получить персональный юмор невозможно.\n\n"
-        "Присоединяйтесь и смейтесь вместе с нами! 😄"
+        "«Персональный юмор»\n\n"
+        "В этом разделе вы можете получить уникальную шутку, созданную специально для вас, "
+        "— с учётом вашего имени, тематики и формата юмора.\n\n"
+        "🎁 Описание:\n"
+        "«Персональный юмор» — эксклюзивная функция нашей группы. В отличие от обычных публикаций, "
+        "которые выходят каждые 15 минут во всех темах, этот юмор генерируется искусственным интеллектом "
+        "индивидуально для вас.\n"
+        "Он не повторяется и учитывает ваши настройки: «Имя», «Тематика» и «Формат» юмора.\n\n"
+        "📋 Условия и инструкции\n"
+        "Чтобы получить персональный юмор, выполните четыре простых шага:\n"
+        "1. Вступите в группу ЮМОР от AI: https://t.me/ai_umor_24 , если ещё не являетесь её участником.\n"
+        "2. Нажмите кнопку ниже (или напишите боту /start), чтобы получить вашу персональную реферальную ссылку.\n"
+        "3. Отправьте эту ссылку другу и дождитесь, когда он вступит в группу.\n"
+        "4. Как только ваш друг вступит в группу, бот пришлёт вам в личные сообщения настройки «Персональный юмор» "
+        "и сразу сгенерирует для вас уникальную шутку, видимую только вам.\n\n"
+        "⚠️ Важно: засчитывается только приглашение по вашей персональной ссылке. "
+        "Обычное приглашение через Telegram не активирует персональный юмор.\n\n"
+        "⚙️ Как это работает\n"
+        "• После того как ваш друг вступает по вашей ссылке, бот автоматически уведомляет вас.\n"
+        "• Вы открываете меню настройки и выбираете:\n"
+        "   – ваше имя (по желанию),\n"
+        "   – тематику (одну из 10: быт, работа, отношения, деньги, еда, спорт, гаджеты, учёба, транспорт, абсурд),\n"
+        "   – формат (анекдот, вопрос-ответ, игра слов, смешное определение, диалог).\n"
+        "• Бот генерирует шутку и отправляет её вам в личные сообщения.\n"
+        "• Лимит: не более 10 персональных шуток в день. Лимит приглашений контактов — также 10 в день.\n\n"
+        "✨ Что ещё есть в группе?\n"
+        "Помимо персонального юмора, наша группа ежедневно публикует свежие шутки во всех тематических темах "
+        "— автоматически, без вашего участия.\n"
+        "Юмор публикуется с учётом календарных праздников, некоторых хайповых событий и других гибко настроенных параметров.\n"
+        "Например, публикации, приуроченные к календарному празднику, начинают появляться с нарастающей частотой "
+        "за неделю до его наступления и постепенно заканчиваются через 7 дней после даты праздника. "
+        "При этом параллельно выходят шутки на разные темы.\n\n"
+        "Подписывайтесь и смейтесь вместе с нами! 😄"
     )
 
     if not BOT_USERNAME:
         logger.error("BOT_USERNAME не установлен!")
         return
-    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{BOT_USERNAME}?start=personal")]]
+    # Кнопка теперь ведёт на ?start=referral, чтобы сразу получить реферальную ссылку
+    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{BOT_USERNAME}?start=referral")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
@@ -258,7 +284,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     logger.info(f"Start from {user.id}, args={args}")
-    
+
+    # Обработка перехода по кнопке ?start=referral
+    if args and args[0] == "referral":
+        await referral(update, context)
+        return
+
     if args and args[0] == "personal":
         await personal_joke(update, context)
         return
@@ -277,6 +308,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_data.get("has_invited"):
             keyboard.append([InlineKeyboardButton("🎁 Получить персональный юмор", callback_data="get_joke")])
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    logger.info(f"Referral from {user.id}")
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Эта команда работает только в личных сообщениях.")
+        return
+    if not check_daily_invite_limit(user.id):
+        await update.message.reply_text("Вы сегодня уже пригласили 10 друзей, возвращайтесь завтра!")
+        return
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user.id}"
+    keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора!")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
+        reply_markup=reply_markup
+    )
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -556,6 +604,7 @@ async def main():
     logger.info(f"Bot username: {BOT_USERNAME}")
     
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("referral", referral))
     application.add_handler(CommandHandler("personal", personal_joke))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
