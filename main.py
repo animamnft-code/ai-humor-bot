@@ -67,7 +67,7 @@ EVENT_PROBABILITY = 0.15
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
 BOT_USERNAME = None
-LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")  # приоритет окружению
+LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")
 
 def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI
@@ -83,7 +83,6 @@ def load_config():
             HOLIDAYS = config.get("holidays", HOLIDAYS)
             CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
             EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
-            # Если переменная окружения не задана, берём из файла
             if not LOGO_FILE_ID:
                 LOGO_FILE_ID = config.get("logo_file_id", None)
     else:
@@ -303,7 +302,6 @@ async def send_personal_topic_description():
     if not BOT_USERNAME:
         logger.error("BOT_USERNAME не установлен!")
         return
-    # Кнопка теперь inline-кнопка, чтобы не требовалось повторное /start
     keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", callback_data="invite_from_topic")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -325,24 +323,37 @@ async def send_invite_with_photo(user_id):
     try:
         ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
         share_url = get_share_url(ref_link)
-        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=share_url)]]
 
+        # Кнопки: "Отправить другу" и "Присоединиться"
+        keyboard = [
+            [InlineKeyboardButton("📤 Отправить другу", url=share_url)],
+            [InlineKeyboardButton("🚀 Присоединиться", url=ref_link)]
+        ]
+
+        # Подпись с кликабельной ссылкой на группу
         if LOGO_FILE_ID:
             caption = (
-                f"Присоединяйся к группе юмора: \"ЮМОР от AI\"!\n\n"
-                f"Ваша реферальная ссылка: {ref_link}\n\n"
-                f"Отправьте это сообщение другу или используйте кнопку ниже."
+                f'Присоединяйся к группе юмора: <a href="{ref_link}">"ЮМОР от AI"</a>!\n\n'
+                f'Ваша реферальная ссылка: {ref_link}\n\n'
+                f'Отправьте это сообщение другу или используйте кнопку ниже.'
             )
             await bot.send_photo(
                 chat_id=user_id,
                 photo=LOGO_FILE_ID,
                 caption=caption,
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
+            text = (
+                f'Присоединяйся к группе юмора: <a href="{ref_link}">"ЮМОР от AI"</a>!\n\n'
+                f'Ваша реферальная ссылка: {ref_link}\n\n'
+                f'Отправьте это сообщение другу или используйте кнопку ниже.'
+            )
             await bot.send_message(
                 chat_id=user_id,
-                text=f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
+                text=text,
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         logger.info(f"Приглашение отправлено пользователю {user_id}")
@@ -406,7 +417,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Callback {query.data} from {user.id}")
 
     if query.data == "invite_from_topic":
-        # Пользователь нажал кнопку в теме «Персональный юмор»
         if not await check_is_member(user.id):
             await query.edit_message_text(
                 "Для начала нужно быть участником этой группы: https://t.me/ai_umor_24\n"
@@ -620,7 +630,6 @@ async def handle_logo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         global LOGO_FILE_ID
         LOGO_FILE_ID = photo.file_id
         save_config()
-        # Отправляем ID в ответ, чтобы вы могли его скопировать
         await update.message.reply_text(
             f"Логотип сохранён!\n\nfile_id: {LOGO_FILE_ID}\n\n"
             f"Добавьте этот ID в переменную окружения LOGO_FILE_ID в Render, чтобы фото сохранялось после перезапусков."
