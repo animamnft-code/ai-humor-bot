@@ -24,11 +24,9 @@ if PERSONAL_TOPIC_ID:
 else:
     PERSONAL_TOPIC_ID = None
 
-# Лимиты
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
-# Дефолтные значения (будут перезаписаны из config.json)
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
     "анекдот": "#анекдоты",
@@ -68,10 +66,11 @@ EVENT_PROBABILITY = 0.15
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
 BOT_USERNAME = None
+LOGO_FILE_ID = None  # загружается из config.json
 
 def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI
-    global HOLIDAYS, CURRENT_EVENTS, EVENT_PROBABILITY
+    global HOLIDAYS, CURRENT_EVENTS, EVENT_PROBABILITY, LOGO_FILE_ID
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -83,8 +82,24 @@ def load_config():
             HOLIDAYS = config.get("holidays", HOLIDAYS)
             CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
             EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
+            LOGO_FILE_ID = config.get("logo_file_id", None)
     else:
         pass
+
+def save_config():
+    config = {
+        "formats": FORMATS,
+        "hashtags": FORMAT_HASHTAGS,
+        "max_tokens": FORMAT_MAX_TOKENS,
+        "topic_ids": TOPIC_IDS,
+        "topic_emoji": TOPIC_EMOJI,
+        "holidays": HOLIDAYS,
+        "current_events": CURRENT_EVENTS,
+        "event_probability": EVENT_PROBABILITY,
+        "logo_file_id": LOGO_FILE_ID,
+    }
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -262,7 +277,6 @@ async def send_personal_topic_description():
     if not BOT_USERNAME:
         logger.error("BOT_USERNAME не установлен!")
         return
-    # Кнопка теперь ведёт на ?start=referral, чтобы сразу получить реферальную ссылку
     keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{BOT_USERNAME}?start=referral")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -279,13 +293,37 @@ async def send_personal_topic_description():
     except Exception as e:
         logger.error(f"Ошибка отправки описания: {e}")
 
+# ===== ОТПРАВКА ПРИГЛАШЕНИЯ С ФОТО =====
+async def send_invite_with_photo(user_id):
+    if not LOGO_FILE_ID:
+        ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора: \"ЮМОР от AI\"!")]]
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+        caption = (
+            f"Присоединяйся к группе юмора: \"ЮМОР от AI\"!\n\n"
+            f"Ваша реферальная ссылка: {ref_link}\n\n"
+            f"Отправьте это сообщение другу или используйте кнопку ниже."
+        )
+        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора: \"ЮМОР от AI\"!")]]
+        await bot.send_photo(
+            chat_id=user_id,
+            photo=LOGO_FILE_ID,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     logger.info(f"Start from {user.id}, args={args}")
 
-    # Обработка перехода по кнопке ?start=referral
     if args and args[0] == "referral":
         await referral(update, context)
         return
@@ -318,13 +356,7 @@ async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_daily_invite_limit(user.id):
         await update.message.reply_text("Вы сегодня уже пригласили 10 друзей, возвращайтесь завтра!")
         return
-    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user.id}"
-    keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора!")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
-        reply_markup=reply_markup
-    )
+    await send_invite_with_photo(user.id)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -342,21 +374,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Вступите в группу, а затем повторите попытку."
             )
             return
-        if not BOT_USERNAME:
-            logger.error("BOT_USERNAME не установлен!")
-            BOT_USERNAME_FALLBACK = os.getenv("BOT_USERNAME", "ai_umor_24")
-        else:
-            BOT_USERNAME_FALLBACK = BOT_USERNAME
-        ref_link = f"https://t.me/{BOT_USERNAME_FALLBACK}?start=ref_{user.id}"
-        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора!")]]
-        try:
-            await query.edit_message_text(
-                "Отправьте приглашение другу. После того как он вступит в группу, вы сможете получить персональный юмор.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            logger.info("Кнопка отправки другу показана")
-        except Exception as e:
-            logger.error(f"Ошибка при показе кнопки: {e}", exc_info=True)
+        await send_invite_with_photo(user.id)
     elif query.data == "get_joke":
         await personal_joke_from_callback(update, context)
     elif query.data == "set_name":
@@ -537,9 +555,29 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             logger.error(f"Ошибка отправки приветствия: {e}")
 
+# ===== КОМАНДА ДЛЯ ЗАГРУЗКИ ЛОГОТИПА =====
+async def setlogo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_USER_ID:
+        await update.message.reply_text("Команда доступна только администратору.")
+        return
+    await update.message.reply_text("Отправьте изображение логотипа (фото) — я сохраню его для приглашений.")
+
+async def handle_logo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_USER_ID:
+        return
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        global LOGO_FILE_ID
+        LOGO_FILE_ID = photo.file_id
+        save_config()
+        await update.message.reply_text("Логотип сохранён! Теперь он будет использоваться в приглашениях.")
+    else:
+        await update.message.reply_text("Пожалуйста, отправьте именно изображение.")
+
 # ===== ПЛАНИРОВЩИК ПУБЛИКАЦИЙ =====
 async def publish_joke():
-    """Генерирует и публикует шутку в группу, учитывая праздники и события."""
     topic = random.choice(list(TOPIC_IDS.keys()))
     thread_id = TOPIC_IDS[topic]
     
@@ -606,6 +644,8 @@ async def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("referral", referral))
     application.add_handler(CommandHandler("personal", personal_joke))
+    application.add_handler(CommandHandler("setlogo", setlogo))
+    application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, handle_logo_photo))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     application.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))
