@@ -67,7 +67,7 @@ EVENT_PROBABILITY = 0.15
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
 BOT_USERNAME = None
-LOGO_FILE_ID = None
+LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")  # приоритет окружению
 
 def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI
@@ -83,7 +83,9 @@ def load_config():
             HOLIDAYS = config.get("holidays", HOLIDAYS)
             CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
             EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
-            LOGO_FILE_ID = config.get("logo_file_id", None)
+            # Если переменная окружения не задана, берём из файла
+            if not LOGO_FILE_ID:
+                LOGO_FILE_ID = config.get("logo_file_id", None)
     else:
         pass
 
@@ -140,6 +142,25 @@ async def check_is_member(user_id):
         logger.error(f"Ошибка проверки членства: {e}")
         return False
 
+def check_daily_invite_limit(user_id):
+    today = date.today().isoformat()
+    user_data = get_user_data(user_id)
+    if user_data.get("last_invite_date") != today:
+        user_data["invites_today"] = 0
+        user_data["last_invite_date"] = today
+        save_user_data(user_id, user_data)
+    return user_data.get("invites_today", 0) < MAX_INVITES_PER_DAY
+
+def increment_invite_count(user_id):
+    today = date.today().isoformat()
+    user_data = get_user_data(user_id)
+    if user_data.get("last_invite_date") != today:
+        user_data["invites_today"] = 0
+        user_data["last_invite_date"] = today
+    user_data["invites_today"] = user_data.get("invites_today", 0) + 1
+    user_data["total_invites"] = user_data.get("total_invites", 0) + 1
+    save_user_data(user_id, user_data)
+
 def check_daily_joke_limit(user_id):
     today = date.today().isoformat()
     user_data = get_user_data(user_id)
@@ -159,7 +180,6 @@ def increment_joke_count(user_id):
     save_user_data(user_id, user_data)
 
 def get_share_url(ref_link):
-    """Возвращает корректную share-ссылку для Telegram."""
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
     return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
 
@@ -283,7 +303,8 @@ async def send_personal_topic_description():
     if not BOT_USERNAME:
         logger.error("BOT_USERNAME не установлен!")
         return
-    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", url=f"https://t.me/{BOT_USERNAME}?start=referral")]]
+    # Кнопка теперь inline-кнопка, чтобы не требовалось повторное /start
+    keyboard = [[InlineKeyboardButton("🎁 Получить персональный юмор", callback_data="invite_from_topic")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
@@ -384,7 +405,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
-    if query.data == "invite_contact":
+    if query.data == "invite_from_topic":
+        # Пользователь нажал кнопку в теме «Персональный юмор»
+        if not await check_is_member(user.id):
+            await query.edit_message_text(
+                "Для начала нужно быть участником этой группы: https://t.me/ai_umor_24\n"
+                "Вступите в группу, а затем повторите попытку."
+            )
+            return
+        await send_invite_with_photo(user.id)
+    elif query.data == "invite_contact":
         logger.info("Обработка invite_contact")
         if not await check_is_member(user.id):
             await query.edit_message_text(
