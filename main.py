@@ -230,7 +230,14 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
     if user_settings:
         if user_settings.get("name"):
             prompt += f" Используй имя {user_settings['name']}."
-    prompt += " Пиши кратко и смешно, законченный текст. Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
+    # Добавляем требования к логике
+    prompt += (
+        " Пиши кратко и смешно, законченный текст. "
+        "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
+        "Для диалогов указывай, кому адресована каждая реплика. "
+        "Используй максимум одну метафору на шутку. "
+        "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
+    )
 
     try:
         response = groq_client.chat.completions.create(
@@ -324,13 +331,11 @@ async def send_invite_with_photo(user_id):
         ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
         share_url = get_share_url(ref_link)
 
-        # Кнопки: "Отправить другу" и "Присоединиться"
         keyboard = [
             [InlineKeyboardButton("📤 Отправить другу", url=share_url)],
             [InlineKeyboardButton("🚀 Присоединиться", url=ref_link)]
         ]
 
-        # Подпись с кликабельной ссылкой на группу
         if LOGO_FILE_ID:
             caption = (
                 f'Присоединяйся к группе юмора: <a href="{ref_link}">"ЮМОР от AI"</a>!\n\n'
