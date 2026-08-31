@@ -4,7 +4,7 @@ import json
 import asyncio
 import random
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
@@ -28,14 +28,7 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
-TOPIC_IDS = {
-    "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
-    "спорт": 19, "гаджеты": 21, "учёба": 23, "транспорт": 25, "абсурд": 27,
-}
-TOPIC_EMOJI = {
-    "быт": "🏠", "работа": "💼", "отношения": "❤️", "деньги": "💰", "еда": "🍔",
-    "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "транспорт": "✈️", "абсурд": "🎭",
-}
+# Дефолтные значения (будут перезаписаны из config.json)
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
     "анекдот": "#анекдоты",
@@ -44,20 +37,52 @@ FORMAT_HASHTAGS = {
     "смешное определение": "#смешные_определения",
     "диалог": "#диалоги",
 }
+FORMAT_MAX_TOKENS = {
+    "анекдот": 250,
+    "вопрос-ответ": 200,
+    "игра слов": 180,
+    "смешное определение": 200,
+    "диалог": 220,
+}
+TOPIC_IDS = {
+    "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
+    "спорт": 19, "гаджеты": 21, "учёба": 23, "транспорт": 25, "абсурд": 27,
+}
+TOPIC_EMOJI = {
+    "быт": "🏠", "работа": "💼", "отношения": "❤️", "деньги": "💰", "еда": "🍔",
+    "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "транспорт": "✈️", "абсурд": "🎭",
+}
+HOLIDAYS = [
+    {"name": "Новый год", "month": 1, "day": 1},
+    {"name": "День защитника Отечества", "month": 2, "day": 23},
+    {"name": "Международный женский день", "month": 3, "day": 8},
+    {"name": "День смеха", "month": 4, "day": 1},
+    {"name": "День Победы", "month": 5, "day": 9},
+    {"name": "День России", "month": 6, "day": 12},
+    {"name": "День знаний", "month": 9, "day": 1},
+    {"name": "День народного единства", "month": 11, "day": 4},
+]
+CURRENT_EVENTS = []
+EVENT_PROBABILITY = 0.15
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
 BOT_USERNAME = None
 
 def load_config():
-    global FORMATS, TOPIC_IDS, TOPIC_EMOJI, FORMAT_HASHTAGS
+    global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI
+    global HOLIDAYS, CURRENT_EVENTS, EVENT_PROBABILITY
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
             FORMATS = config.get("formats", FORMATS)
             FORMAT_HASHTAGS = config.get("hashtags", FORMAT_HASHTAGS)
+            FORMAT_MAX_TOKENS = config.get("max_tokens", FORMAT_MAX_TOKENS)
             TOPIC_IDS = config.get("topic_ids", TOPIC_IDS)
             TOPIC_EMOJI = config.get("topic_emoji", TOPIC_EMOJI)
+            HOLIDAYS = config.get("holidays", HOLIDAYS)
+            CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
+            EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
     else:
         pass
 
@@ -92,7 +117,6 @@ def save_user_data(user_id, user_data):
     save_data(data)
 
 async def check_is_member(user_id):
-    """Проверяет, является ли пользователь участником группы (async)."""
     try:
         member = await bot.get_chat_member(chat_id=CHAT_ID, user_id=user_id)
         return member.status in ("member", "administrator", "creator")
@@ -101,7 +125,6 @@ async def check_is_member(user_id):
         return False
 
 def check_daily_joke_limit(user_id):
-    """Проверяет, не превысил ли пользователь дневной лимит персональных шуток."""
     today = date.today().isoformat()
     user_data = get_user_data(user_id)
     if user_data.get("last_joke_date") != today:
@@ -111,7 +134,6 @@ def check_daily_joke_limit(user_id):
     return user_data.get("jokes_today", 0) < MAX_PERSONAL_JOKES_PER_DAY
 
 def increment_joke_count(user_id):
-    """Увеличивает счётчик персональных шуток для пользователя."""
     today = date.today().isoformat()
     user_data = get_user_data(user_id)
     if user_data.get("last_joke_date") != today:
@@ -120,15 +142,56 @@ def increment_joke_count(user_id):
     user_data["jokes_today"] = user_data.get("jokes_today", 0) + 1
     save_user_data(user_id, user_data)
 
-def generate_joke_sync(topic, format_type=None, user_settings=None):
+# ===== ФУНКЦИИ ПРАЗДНИКОВ И СОБЫТИЙ =====
+def get_current_holiday():
+    today = datetime.now()
+    for holiday in HOLIDAYS:
+        holiday_date = datetime(today.year, holiday["month"], holiday["day"])
+        delta = today - holiday_date
+        if -7 <= delta.days <= 7:
+            return holiday["name"]
+    return None
+
+def get_holiday_bias():
+    today = datetime.now()
+    closest_holiday = None
+    min_delta = 100
+    for holiday in HOLIDAYS:
+        holiday_date = datetime(today.year, holiday["month"], holiday["day"])
+        delta = (today - holiday_date).days
+        if abs(delta) < min_delta:
+            min_delta = abs(delta)
+            closest_holiday = holiday
+    if closest_holiday is None:
+        return 0.0
+    delta = (today - datetime(today.year, closest_holiday["month"], closest_holiday["day"])).days
+    if delta < -7 or delta > 7:
+        return 0.0
+    prob = 0.65 - (abs(delta) / 7) * 0.55
+    return max(0.05, prob)
+
+def get_random_event():
+    if CURRENT_EVENTS:
+        return random.choice(CURRENT_EVENTS)
+    return None
+
+# ===== ГЕНЕРАЦИЯ ШУТКИ =====
+def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS.get(format_type, "")
+    max_tokens = FORMAT_MAX_TOKENS.get(format_type, 250)
+
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
+    if holiday:
+        prompt += f" Приурочь шутку к празднику: {holiday}."
+    if event:
+        prompt += f" Упомяни событие: {event}."
     if user_settings:
         if user_settings.get("name"):
             prompt += f" Используй имя {user_settings['name']}."
     prompt += " Пиши кратко и смешно, законченный текст. Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
+
     try:
         response = groq_client.chat.completions.create(
             model="qwen/qwen3.8-27b",
@@ -137,7 +200,7 @@ def generate_joke_sync(topic, format_type=None, user_settings=None):
                 {"role": "user", "content": prompt}
             ],
             temperature=0.9,
-            max_tokens=200,
+            max_tokens=max_tokens,
         )
         raw = response.choices[0].message.content.strip()
         joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
@@ -226,7 +289,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "invite_contact":
         logger.info("Обработка invite_contact")
         if not await check_is_member(user.id):
-            # Ссылка на группу в сообщении
             await query.edit_message_text(
                 "Для начала нужно быть участником этой группы: https://t.me/ai_umor_24\n"
                 "Вступите в группу, а затем повторите попытку."
@@ -285,7 +347,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_user_data(user.id, user_data)
         await personal_joke_from_callback(update, context)
     elif query.data == "confirm_get_joke":
-        # Проверяем лимит
         if not check_daily_joke_limit(user.id):
             await query.edit_message_text("Вы сегодня уже получили 10 персональных шуток. Лимит исчерпан. Возвращайтесь завтра!")
             return
@@ -296,7 +357,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         format_type = settings.get("format")
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type, settings)
         if joke:
-            # Увеличиваем счётчик
             increment_joke_count(user.id)
             await query.message.reply_text(joke, parse_mode='HTML')
             try:
@@ -401,11 +461,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await personal_joke(update, context)
 
 async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка изменения статуса участника группы."""
     new_chat_member = update.chat_member.new_chat_member
     old_chat_member = update.chat_member.old_chat_member
     user = new_chat_member.user
-
     if new_chat_member.status in ("member", "administrator", "creator") and old_chat_member.status not in ("member", "administrator", "creator"):
         invite_data = data.get("invites", {}).get(str(user.id))
         if invite_data:
@@ -423,7 +481,6 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     logger.info(f"Уведомление отправлено пригласившему {inviter_id}")
                 except Exception as e:
                     logger.error(f"Ошибка уведомления пригласившего: {e}")
-
         try:
             text = "Добро пожаловать в группу! Теперь вы можете приглашать друзей и получать персональный юмор."
             keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
@@ -434,10 +491,19 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ===== ПЛАНИРОВЩИК ПУБЛИКАЦИЙ =====
 async def publish_joke():
-    """Генерирует и публикует шутку в группу."""
+    """Генерирует и публикует шутку в группу, учитывая праздники и события."""
     topic = random.choice(list(TOPIC_IDS.keys()))
     thread_id = TOPIC_IDS[topic]
-    joke_text = await asyncio.to_thread(generate_joke_sync, topic)
+    
+    holiday = None
+    if random.random() < get_holiday_bias():
+        holiday = get_current_holiday()
+    
+    event = None
+    if random.random() < EVENT_PROBABILITY:
+        event = get_random_event()
+    
+    joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
     if joke_text:
         try:
             await bot.send_message(
@@ -453,7 +519,6 @@ async def publish_joke():
             logger.error(f"Ошибка публикации: {e}")
 
 async def scheduler():
-    """Бесконечный цикл публикаций каждые 13-17 минут."""
     logger.info("Планировщик запущен.")
     while True:
         try:
@@ -499,12 +564,9 @@ async def main():
     await application.initialize()
     await application.start()
     
-    # Отправляем описание в тему «Персональный юмор», если задан ID
     await send_personal_topic_description()
     
-    # Ждём 10 секунд для завершения старого процесса
     await asyncio.sleep(10)
-    # Запускаем планировщик как фоновую задачу
     asyncio.create_task(scheduler())
     await application.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query", "chat_member"])
     await asyncio.Event().wait()
