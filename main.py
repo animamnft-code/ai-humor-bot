@@ -327,7 +327,6 @@ async def send_invite_with_photo(user_id):
         logger.info(f"Приглашение отправлено пользователю {user_id}")
     except Exception as e:
         logger.error(f"Ошибка при отправке приглашения: {e}")
-        # Запасной вариант: отправляем текстовое сообщение без фото
         try:
             ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
             await bot.send_message(
@@ -591,7 +590,11 @@ async def handle_logo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         global LOGO_FILE_ID
         LOGO_FILE_ID = photo.file_id
         save_config()
-        await update.message.reply_text("Логотип сохранён! Теперь он будет использоваться в приглашениях.")
+        # Отправляем ID в ответ, чтобы вы могли его скопировать
+        await update.message.reply_text(
+            f"Логотип сохранён!\n\nfile_id: {LOGO_FILE_ID}\n\n"
+            f"Добавьте этот ID в переменную окружения LOGO_FILE_ID в Render, чтобы фото сохранялось после перезапусков."
+        )
     else:
         await update.message.reply_text("Пожалуйста, отправьте именно изображение.")
 
