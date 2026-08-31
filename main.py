@@ -7,6 +7,7 @@ import re
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
+from urllib.parse import urlencode
 
 import groq
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -66,7 +67,7 @@ EVENT_PROBABILITY = 0.15
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
 BOT_USERNAME = None
-LOGO_FILE_ID = None  # загружается из config.json
+LOGO_FILE_ID = None
 
 def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI
@@ -156,6 +157,11 @@ def increment_joke_count(user_id):
         user_data["last_joke_date"] = today
     user_data["jokes_today"] = user_data.get("jokes_today", 0) + 1
     save_user_data(user_id, user_data)
+
+def get_share_url(ref_link):
+    """Возвращает корректную share-ссылку для Telegram."""
+    text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
+    return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
 
 # ===== ФУНКЦИИ ПРАЗДНИКОВ И СОБЫТИЙ =====
 def get_current_holiday():
@@ -295,28 +301,41 @@ async def send_personal_topic_description():
 
 # ===== ОТПРАВКА ПРИГЛАШЕНИЯ С ФОТО =====
 async def send_invite_with_photo(user_id):
-    if not LOGO_FILE_ID:
+    try:
         ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
-        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора: \"ЮМОР от AI\"!")]]
-        await bot.send_message(
-            chat_id=user_id,
-            text=f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
-        caption = (
-            f"Присоединяйся к группе юмора: \"ЮМОР от AI\"!\n\n"
-            f"Ваша реферальная ссылка: {ref_link}\n\n"
-            f"Отправьте это сообщение другу или используйте кнопку ниже."
-        )
-        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=f"https://t.me/share/url?url={ref_link}&text=Присоединяйся к группе юмора: \"ЮМОР от AI\"!")]]
-        await bot.send_photo(
-            chat_id=user_id,
-            photo=LOGO_FILE_ID,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        share_url = get_share_url(ref_link)
+        keyboard = [[InlineKeyboardButton("📤 Отправить другу", url=share_url)]]
+
+        if LOGO_FILE_ID:
+            caption = (
+                f"Присоединяйся к группе юмора: \"ЮМОР от AI\"!\n\n"
+                f"Ваша реферальная ссылка: {ref_link}\n\n"
+                f"Отправьте это сообщение другу или используйте кнопку ниже."
+            )
+            await bot.send_photo(
+                chat_id=user_id,
+                photo=LOGO_FILE_ID,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        logger.info(f"Приглашение отправлено пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке приглашения: {e}")
+        # Запасной вариант: отправляем текстовое сообщение без фото
+        try:
+            ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"Ваша реферальная ссылка:\n{ref_link}\n\nПоделитесь ей с друзьями!"
+            )
+        except Exception as e2:
+            logger.error(f"Не удалось отправить даже текст: {e2}")
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
