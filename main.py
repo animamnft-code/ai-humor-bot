@@ -462,29 +462,36 @@ async def send_invite_with_photo(user_id):
         except Exception as e2:
             logger.error(f"Не удалось отправить даже текст: {e2}")
 
-# ===== НАСТРОЙКА ЗАКРЕПЛЁННЫХ КНОПОК В ТЕМАХ =====
+# ===== НАСТРОЙКА ЗАКРЕПЛЁННЫХ КНОПОК В ТЕМАХ (С ПАУЗАМИ И ПОВТОРАМИ) =====
 async def setup_forum_buttons():
-    """Отправляет закреплённое сообщение с кнопками в каждую тему."""
+    """Отправляет и закрепляет сообщение с кнопками в каждую тему с паузами."""
     for topic, thread_id in TOPIC_IDS.items():
-        try:
-            text = f"Управление темой «{topic}»"
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}"),
-                    InlineKeyboardButton("Меню", callback_data="menu")
-                ]
-            ])
-            message = await bot.send_message(
-                chat_id=CHAT_ID,
-                text=text,
-                message_thread_id=thread_id,
-                reply_markup=keyboard
-            )
-            # Используем pin_chat_message (правильный метод в PTB v22)
-            await bot.pin_chat_message(chat_id=CHAT_ID, message_id=message.message_id, disable_notification=True)
-            logger.info(f"Закреплённое сообщение с кнопками отправлено и закреплено в теме '{topic}' (ID {thread_id})")
-        except Exception as e:
-            logger.error(f"Ошибка при отправке закреплённого сообщения в тему '{topic}': {e}")
+        for attempt in range(3):  # до 3 попыток
+            try:
+                text = f"Управление темой «{topic}»"
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}"),
+                        InlineKeyboardButton("Меню", callback_data="menu")
+                    ]
+                ])
+                message = await bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=text,
+                    message_thread_id=thread_id,
+                    reply_markup=keyboard
+                )
+                # Пытаемся закрепить, но не прерываемся при ошибке
+                try:
+                    await bot.pin_chat_message(chat_id=CHAT_ID, message_id=message.message_id, disable_notification=True)
+                    logger.info(f"Закреплено в теме '{topic}' (ID {thread_id})")
+                except Exception as pin_error:
+                    logger.warning(f"Не удалось закрепить в теме '{topic}': {pin_error}")
+                break  # успех – выходим из цикла попыток
+            except Exception as e:
+                logger.error(f"Попытка {attempt+1} не удалась для темы '{topic}': {e}")
+                await asyncio.sleep(3)  # пауза перед повторной попыткой
+        await asyncio.sleep(3)  # пауза между темами
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -877,7 +884,7 @@ async def main():
     await application.initialize()
     await application.start()
     
-    # Отправляем закреплённые кнопки в каждую тему
+    # Отправляем и закрепляем кнопки в каждой теме с паузами
     await setup_forum_buttons()
     
     await send_personal_topic_description()
