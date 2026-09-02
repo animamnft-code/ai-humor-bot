@@ -480,8 +480,9 @@ async def setup_forum_buttons():
                 message_thread_id=thread_id,
                 reply_markup=keyboard
             )
-            await bot.pin_message(chat_id=CHAT_ID, message_id=message.message_id, disable_notification=True)
-            logger.info(f"Закреплённое сообщение с кнопками отправлено в тему '{topic}' (ID {thread_id})")
+            # Используем pin_chat_message (правильный метод в PTB v22)
+            await bot.pin_chat_message(chat_id=CHAT_ID, message_id=message.message_id, disable_notification=True)
+            logger.info(f"Закреплённое сообщение с кнопками отправлено и закреплено в теме '{topic}' (ID {thread_id})")
         except Exception as e:
             logger.error(f"Ошибка при отправке закреплённого сообщения в тему '{topic}': {e}")
 
