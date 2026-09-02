@@ -153,8 +153,7 @@ load_config()
 load_examples()
 data = load_data()
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
-# Устанавливаем таймаут 30 секунд для всех запросов
-bot = Bot(token=TELEGRAM_BOT_TOKEN, timeout=30)
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
