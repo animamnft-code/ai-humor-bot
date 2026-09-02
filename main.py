@@ -29,10 +29,10 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
-MIN_JOKE_LENGTH = 30
+MIN_JOKE_LENGTH = 20  # снизили с 30, чтобы меньше отсеивать
 
 # Модель для генерации
-MODEL_NAME = "openai/gpt-oss-20b"
+MODEL_NAME = "qwen/qwen3.6-27b"  # переключились с openai/gpt-oss-20b
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
@@ -286,7 +286,7 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка получения моделей: {e}")
         await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
 
-# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками и очисткой HTML) =====
+# ===== ГЕНЕРАЦИЯ ШУТКИ =====
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
@@ -314,25 +314,25 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
         "Для диалогов указывай, кому адресована каждая реплика. "
         "Используй максимум одну метафору на шутку. "
-        "Ответ должен содержать не менее 30 символов. "
-        "Не используй HTML-теги, особенно <think>. Пиши только чистый текст. "
+        "Ответ должен содержать не менее 20 символов. "
+        "Не используй HTML-теги. Пиши только чистый текст. "
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    # Повторяем до 3 раз, если шутка короче 30 символов или содержит HTML-теги
+    # Повторяем до 3 раз, если шутка короче 20 символов
     for attempt in range(3):
         try:
             response = groq_client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
-                    {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно. Не используй HTML-теги."},
+                    {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
                 max_tokens=max_tokens,
             )
             raw = response.choices[0].message.content.strip()
-            # Удаляем HTML-теги (think, /think и любые другие)
+            # Удаляем HTML-теги
             joke_text = re.sub(r"<[^>]+>", "", raw)
             joke_text = re.sub(r"\[ТЕМА:.*?\]", "", joke_text, flags=re.IGNORECASE).strip()
             joke_text = re.sub(r'#\S+', '', joke_text).strip()
