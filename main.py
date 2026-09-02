@@ -29,10 +29,10 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
-MIN_JOKE_LENGTH = 20  # снизили с 30, чтобы меньше отсеивать
+MIN_JOKE_LENGTH = 25  # увеличили с 20 для более надёжной генерации
 
 # Модель для генерации
-MODEL_NAME = "qwen/qwen3.6-27b"  # переключились с openai/gpt-oss-20b
+MODEL_NAME = "openai/gpt-oss-20b"  # возвращаем проверенную модель
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
@@ -287,6 +287,13 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
 
 # ===== ГЕНЕРАЦИЯ ШУТКИ =====
+# Список стоп-слов, которые указывают на "размышления" модели
+BAD_PATTERNS = [
+    "analyze the request", "brainstorm", "constraints", "format", "response", 
+    "role", "task", "steps", "approach", "conclusion", "requirements",
+    "final answer", "assistant", "user", "system", "thinking", "analysis"
+]
+
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
@@ -314,12 +321,12 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
         "Для диалогов указывай, кому адресована каждая реплика. "
         "Используй максимум одну метафору на шутку. "
-        "Ответ должен содержать не менее 20 символов. "
+        "Ответ должен содержать не менее 25 символов. "
         "Не используй HTML-теги. Пиши только чистый текст. "
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    # Повторяем до 3 раз, если шутка короче 20 символов
+    # Повторяем до 3 раз, если шутка короче 25 символов или содержит стоп-слова
     for attempt in range(3):
         try:
             response = groq_client.chat.completions.create(
@@ -339,13 +346,18 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
             joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
             joke_text = joke_text.strip()
 
-            if len(joke_text) >= MIN_JOKE_LENGTH:
+            # Проверка на стоп-слова (слова на английском)
+            lower_text = joke_text.lower()
+            has_bad_pattern = any(pattern in lower_text for pattern in BAD_PATTERNS)
+
+            if len(joke_text) >= MIN_JOKE_LENGTH and not has_bad_pattern:
                 emoji = TOPIC_EMOJI.get(topic, "😄")
                 if hashtag and hashtag not in joke_text:
                     joke_text += f"\n\n<i>{hashtag}</i>"
                 return f"{emoji} {joke_text}"
             else:
-                logger.warning(f"Попытка {attempt+1}: шутка короче {MIN_JOKE_LENGTH} символов")
+                reason = "длина" if len(joke_text) < MIN_JOKE_LENGTH else "стоп-слова"
+                logger.warning(f"Попытка {attempt+1}: отклонено по причине {reason}: {joke_text[:100]}")
         except Exception as e:
             logger.error(f"Ошибка генерации (попытка {attempt+1}): {e}")
     return None
