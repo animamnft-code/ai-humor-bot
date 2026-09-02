@@ -10,6 +10,7 @@ import threading
 from urllib.parse import urlencode
 
 import groq
+import httpx
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ChatMemberHandler
 from telegram.error import TelegramError, BadRequest
@@ -28,6 +29,9 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
+# Модель для генерации (пока прежняя, после проверки /models сможем заменить)
+MODEL_NAME = "qwen/qwen3.8-27b"
+
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
     "анекдот": "#анекдоты",
@@ -42,6 +46,13 @@ FORMAT_MAX_TOKENS = {
     "игра слов": 180,
     "смешное определение": 200,
     "диалог": 220,
+}
+FORMAT_MAX_CHARS = {
+    "анекдот": 350,
+    "вопрос-ответ": 300,
+    "игра слов": 250,
+    "смешное определение": 300,
+    "диалог": 350,
 }
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
@@ -74,7 +85,7 @@ EXAMPLES_FILE = "examples.json"
 BOT_USERNAME = None
 LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")
 
-examples = {}  # загрузим из файла
+examples = {}
 
 def load_examples():
     global examples
@@ -233,12 +244,34 @@ def get_random_event():
         return random.choice(CURRENT_EVENTS)
     return None
 
+# ===== КОМАНДА ДЛЯ ПРОВЕРКИ ДОСТУПНЫХ МОДЕЛЕЙ =====
+async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет пользователю список доступных моделей Groq."""
+    user = update.effective_user
+    if user.id != ADMIN_USER_ID:
+        await update.message.reply_text("Команда доступна только администратору.")
+        return
+    try:
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get("https://api.groq.com/openai/v1/models", headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            models = [item["id"] for item in data.get("data", [])]
+            await update.message.reply_text("Доступные модели:\n" + "\n".join(models))
+        else:
+            await update.message.reply_text(f"Ошибка получения моделей: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Ошибка получения моделей: {e}")
+        await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
+
 # ===== ГЕНЕРАЦИЯ ШУТКИ =====
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
     hashtag = FORMAT_HASHTAGS.get(format_type, "")
     max_tokens = FORMAT_MAX_TOKENS.get(format_type, 250)
+    max_chars = FORMAT_MAX_CHARS.get(format_type, 300)
 
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
     if holiday:
@@ -249,15 +282,14 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         if user_settings.get("name"):
             prompt += f" Используй имя {user_settings['name']}."
 
-    # Добавляем примеры из examples.json
     format_examples = examples.get(format_type, [])
     if format_examples:
         prompt += "\nПримеры удачных шуток такого формата:\n"
-        for i, ex in enumerate(format_examples[:3], 1):  # возьмём до 3 примеров
+        for i, ex in enumerate(format_examples[:3], 1):
             prompt += f"{i}. {ex}\n"
 
     prompt += (
-        " Пиши кратко и смешно, законченный текст. "
+        f" Пиши кратко и смешно, законченный текст. Максимальная длина — {max_chars} символов. "
         "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
         "Для диалогов указывай, кому адресована каждая реплика. "
         "Используй максимум одну метафору на шутку. "
@@ -266,12 +298,12 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
 
     try:
         response = groq_client.chat.completions.create(
-            model="qwen/qwen3.8-27b",
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,  # снизили с 0.9
+            temperature=0.7,
             max_tokens=max_tokens,
         )
         raw = response.choices[0].message.content.strip()
@@ -736,6 +768,7 @@ async def main():
     application.add_handler(CommandHandler("referral", referral))
     application.add_handler(CommandHandler("personal", personal_joke))
     application.add_handler(CommandHandler("setlogo", setlogo))
+    application.add_handler(CommandHandler("models", models_command))
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, handle_logo_photo))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
