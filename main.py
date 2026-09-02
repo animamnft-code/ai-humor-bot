@@ -30,10 +30,10 @@ MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
 # Минимальная длина шутки (символов)
-MIN_JOKE_LENGTH = 30
+MIN_JOKE_LENGTH = 10  # снизили, чтобы не отсекать короткие, но не пустые
 
-# Модель для генерации
-MODEL_NAME = "openai/gpt-oss-20b"
+# Модель для генерации (можно переопределить через переменную окружения)
+MODEL_NAME = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")  # по умолчанию рабочая
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
@@ -44,18 +44,18 @@ FORMAT_HASHTAGS = {
     "диалог": "#диалоги",
 }
 FORMAT_MAX_TOKENS = {
-    "анекдот": 250,
-    "вопрос-ответ": 200,
-    "игра слов": 180,
-    "смешное определение": 200,
-    "диалог": 220,
+    "анекдот": 300,
+    "вопрос-ответ": 250,
+    "игра слов": 200,
+    "смешное определение": 250,
+    "диалог": 300,
 }
 FORMAT_MAX_CHARS = {
-    "анекдот": 350,
-    "вопрос-ответ": 300,
-    "игра слов": 250,
-    "смешное определение": 300,
-    "диалог": 350,
+    "анекдот": 400,
+    "вопрос-ответ": 350,
+    "игра слов": 300,
+    "смешное определение": 350,
+    "диалог": 400,
 }
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
@@ -298,34 +298,40 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    try:
-        response = groq_client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=max_tokens,
-        )
-        raw = response.choices[0].message.content.strip()
-        joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
-        joke_text = re.sub(r'#\S+', '', joke_text).strip()
-        joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
-        joke_text = joke_text.strip()
+    # Пробуем до 3 раз, если ответ пустой или слишком короткий
+    for attempt in range(3):
+        try:
+            response = groq_client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=max_tokens,
+            )
+            raw = response.choices[0].message.content.strip()
+            joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
+            joke_text = re.sub(r'#\S+', '', joke_text).strip()
+            joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
+            joke_text = joke_text.strip()
 
-        # Проверяем длину основного текста (без эмодзи и хэштега)
-        if len(joke_text) < MIN_JOKE_LENGTH:
-            logger.warning(f"Шутка короче {MIN_JOKE_LENGTH} символов: {joke_text}")
+            # Если текст пустой или слишком короткий, пробуем ещё раз
+            if len(joke_text) < MIN_JOKE_LENGTH:
+                logger.warning(f"Попытка {attempt+1}: шутка слишком короткая: '{joke_text}'")
+                continue
+
+            emoji = TOPIC_EMOJI.get(topic, "😄")
+            if hashtag and hashtag not in joke_text:
+                joke_text += f"\n\n<i>{hashtag}</i>"
+            return f"{emoji} {joke_text}"
+        except Exception as e:
+            logger.error(f"Ошибка генерации: {e}")
             return None
 
-        emoji = TOPIC_EMOJI.get(topic, "😄")
-        if hashtag and hashtag not in joke_text:
-            joke_text += f"\n\n<i>{hashtag}</i>"
-        return f"{emoji} {joke_text}"
-    except Exception as e:
-        logger.error(f"Ошибка генерации: {e}")
-        return None
+    # Если все попытки не удались
+    logger.error(f"Не удалось сгенерировать шутку после 3 попыток. Тема: {topic}, формат: {format_type}")
+    return None
 
 # ===== ОТПРАВКА ОПИСАНИЯ В ТЕМУ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
 async def send_personal_topic_description():
