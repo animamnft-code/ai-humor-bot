@@ -28,6 +28,7 @@ else:
 
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
+MAX_MORE_BUTTON_CLICKS_PER_DAY = 5  # лимит нажатий "Хочу ещё!"
 MIN_JOKE_LENGTH = 20
 
 # Модель для генерации (стабильная)
@@ -41,7 +42,6 @@ FORMAT_HASHTAGS = {
     "смешное определение": "#смешные_определения",
     "диалог": "#диалоги",
 }
-# Увеличенные лимиты токенов для предотвращения обрывов
 FORMAT_MAX_TOKENS = {
     "анекдот": 400,
     "вопрос-ответ": 350,
@@ -137,7 +137,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False}
+    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False, "more_limits": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -208,6 +208,24 @@ def increment_joke_count(user_id):
         user_data["last_joke_date"] = today
     user_data["jokes_today"] = user_data.get("jokes_today", 0) + 1
     save_user_data(user_id, user_data)
+
+# Лимиты для кнопки "Хочу ещё!"
+def check_more_button_limit(user_id):
+    today = date.today().isoformat()
+    user_data = data.get("more_limits", {}).get(str(user_id), {})
+    if user_data.get("date") != today:
+        user_data = {"date": today, "clicks": 0}
+    return user_data.get("clicks", 0) < MAX_MORE_BUTTON_CLICKS_PER_DAY
+
+def increment_more_button_count(user_id):
+    today = date.today().isoformat()
+    more_limits = data.setdefault("more_limits", {})
+    user_data = more_limits.get(str(user_id), {})
+    if user_data.get("date") != today:
+        user_data = {"date": today, "clicks": 0}
+    user_data["clicks"] += 1
+    more_limits[str(user_id)] = user_data
+    save_data(data)
 
 def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
@@ -487,6 +505,61 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
+    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема:формат")
+    if query.data.startswith("more:"):
+        parts = query.data.split(":")
+        if len(parts) == 3:
+            topic = parts[1]
+            format_type = parts[2]
+        else:
+            topic = parts[1]
+            format_type = None
+
+        if not check_more_button_limit(user.id):
+            await query.answer(
+                "Вы сегодня уже получили 5 дополнительных шуток. Лимит исчерпан. Возвращайтесь завтра!",
+                show_alert=True
+            )
+            return
+        increment_more_button_count(user.id)
+        joke = await asyncio.to_thread(generate_joke_sync, topic, format_type)
+        if joke:
+            thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[list(TOPIC_IDS.keys())[0]])
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=joke,
+                message_thread_id=thread_id,
+                disable_web_page_preview=True,
+                disable_notification=True,
+                parse_mode='HTML'
+            )
+            logger.info(f"Дополнительная шутка в теме '{topic}' (формат {format_type})")
+        else:
+            await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
+        return
+
+    # Обработка кнопки "Меню"
+    if query.data == "menu":
+        keyboard = [
+            [InlineKeyboardButton("🎭 Персональный юмор", callback_data="menu_personal")],
+            [InlineKeyboardButton("📚 Темы", callback_data="menu_topics")],
+            [InlineKeyboardButton("ℹ️ О группе", callback_data="menu_about")],
+        ]
+        await query.message.reply_text("Выберите пункт меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # Обработка пунктов меню
+    if query.data == "menu_personal":
+        await query.edit_message_text("Откройте бота в личке и введите /personal, чтобы настроить персональный юмор.")
+        return
+    if query.data == "menu_topics":
+        topics_list = "\n".join([f"{TOPIC_EMOJI[t]} {t}" for t in TOPIC_IDS.keys()])
+        await query.edit_message_text(f"Доступные темы:\n{topics_list}")
+        return
+    if query.data == "menu_about":
+        await query.edit_message_text("ЮМОР от AI — автоматизированная группа с юмором. Шутки публикуются каждые 15 минут. Подписывайтесь и смейтесь!")
+        return
+
     if query.data == "invite_from_topic":
         if not await check_is_member(user.id):
             await query.edit_message_text(
@@ -712,7 +785,8 @@ async def handle_logo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def publish_joke():
     topic = random.choice(list(TOPIC_IDS.keys()))
     thread_id = TOPIC_IDS[topic]
-    
+    format_type = random.choice(FORMATS)  # выбираем формат заранее
+
     holiday = None
     if random.random() < get_holiday_bias():
         holiday = get_current_holiday()
@@ -721,8 +795,15 @@ async def publish_joke():
     if random.random() < EVENT_PROBABILITY:
         event = get_random_event()
     
-    joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
+    joke_text = await asyncio.to_thread(generate_joke_sync, topic, format_type, holiday=holiday, event=event)
     if joke_text:
+        # Добавляем кнопки: Хочу ещё! и Меню
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}:{format_type}"),
+                InlineKeyboardButton("Меню", callback_data="menu")
+            ]
+        ])
         try:
             await bot.send_message(
                 chat_id=CHAT_ID,
@@ -730,7 +811,8 @@ async def publish_joke():
                 message_thread_id=thread_id,
                 disable_web_page_preview=True,
                 disable_notification=True,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
             logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id})")
         except TelegramError as e:
