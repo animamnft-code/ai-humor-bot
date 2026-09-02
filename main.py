@@ -45,11 +45,15 @@ FORMAT_MAX_TOKENS = {
 }
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
-    "спорт": 19, "гаджеты": 21, "учёба": 23, "транспорт": 25, "абсурд": 27,
+    "спорт": 19, "гаджеты": 21, "учёба": 23, "туристы": 25, "абсурд": 27,
 }
 TOPIC_EMOJI = {
     "быт": "🏠", "работа": "💼", "отношения": "❤️", "деньги": "💰", "еда": "🍔",
-    "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "транспорт": "✈️", "абсурд": "🎭",
+    "спорт": "🏁", "гаджеты": "💻", "учёба": "📚", "туристы": "✈️", "абсурд": "🎭",
+}
+TOPIC_WEIGHTS = {
+    "быт": 1.2, "работа": 1.1, "отношения": 1.3, "деньги": 1.0, "еда": 1.0,
+    "спорт": 0.9, "гаджеты": 1.2, "учёба": 0.85, "туристы": 0.9, "абсурд": 1.4,
 }
 HOLIDAYS = [
     {"name": "Новый год", "month": 1, "day": 1},
@@ -66,11 +70,22 @@ EVENT_PROBABILITY = 0.15
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
+EXAMPLES_FILE = "examples.json"
 BOT_USERNAME = None
 LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")
 
+examples = {}  # загрузим из файла
+
+def load_examples():
+    global examples
+    if os.path.exists(EXAMPLES_FILE):
+        with open(EXAMPLES_FILE, "r", encoding="utf-8") as f:
+            examples = json.load(f)
+    else:
+        examples = {}
+
 def load_config():
-    global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI
+    global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI, TOPIC_WEIGHTS
     global HOLIDAYS, CURRENT_EVENTS, EVENT_PROBABILITY, LOGO_FILE_ID
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -80,6 +95,7 @@ def load_config():
             FORMAT_MAX_TOKENS = config.get("max_tokens", FORMAT_MAX_TOKENS)
             TOPIC_IDS = config.get("topic_ids", TOPIC_IDS)
             TOPIC_EMOJI = config.get("topic_emoji", TOPIC_EMOJI)
+            TOPIC_WEIGHTS = config.get("topic_weights", TOPIC_WEIGHTS)
             HOLIDAYS = config.get("holidays", HOLIDAYS)
             CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
             EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
@@ -95,6 +111,7 @@ def save_config():
         "max_tokens": FORMAT_MAX_TOKENS,
         "topic_ids": TOPIC_IDS,
         "topic_emoji": TOPIC_EMOJI,
+        "topic_weights": TOPIC_WEIGHTS,
         "holidays": HOLIDAYS,
         "current_events": CURRENT_EVENTS,
         "event_probability": EVENT_PROBABILITY,
@@ -120,6 +137,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_config()
+load_examples()
 data = load_data()
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -230,7 +248,14 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
     if user_settings:
         if user_settings.get("name"):
             prompt += f" Используй имя {user_settings['name']}."
-    # Добавляем требования к логике
+
+    # Добавляем примеры из examples.json
+    format_examples = examples.get(format_type, [])
+    if format_examples:
+        prompt += "\nПримеры удачных шуток такого формата:\n"
+        for i, ex in enumerate(format_examples[:3], 1):  # возьмём до 3 примеров
+            prompt += f"{i}. {ex}\n"
+
     prompt += (
         " Пиши кратко и смешно, законченный текст. "
         "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
@@ -246,7 +271,7 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
                 {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.9,
+            temperature=0.7,  # снизили с 0.9
             max_tokens=max_tokens,
         )
         raw = response.choices[0].message.content.strip()
@@ -292,7 +317,7 @@ async def send_personal_topic_description():
         "• После того как ваш друг вступает по вашей ссылке, бот автоматически уведомляет вас.\n"
         "• Вы открываете меню настройки и выбираете:\n"
         "   – ваше имя (по желанию),\n"
-        "   – тематику (одну из 10: быт, работа, отношения, деньги, еда, спорт, гаджеты, учёба, транспорт, абсурд),\n"
+        "   – тематику (одну из 10: быт, работа, отношения, деньги, еда, спорт, гаджеты, учёба, туристы, абсурд),\n"
         "   – формат (анекдот, вопрос-ответ, игра слов, смешное определение, диалог).\n"
         "• Бот генерирует шутку и отправляет её вам в личные сообщения.\n"
         "• Лимит: не более 10 персональных шуток в день. Лимит приглашений контактов — также 10 в день.\n\n"
