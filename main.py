@@ -29,7 +29,10 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
-# Модель для генерации — проверено, доступна
+# Минимальная длина шутки (символов)
+MIN_JOKE_LENGTH = 20
+
+# Модель для генерации
 MODEL_NAME = "openai/gpt-oss-20b"
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
@@ -246,7 +249,6 @@ def get_random_event():
 
 # ===== КОМАНДА ДЛЯ ПРОВЕРКИ ДОСТУПНЫХ МОДЕЛЕЙ =====
 async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет пользователю список доступных моделей Groq."""
     user = update.effective_user
     if user.id != ADMIN_USER_ID:
         await update.message.reply_text("Команда доступна только администратору.")
@@ -714,6 +716,10 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
     if joke_text:
+        # Проверяем, что шутка не пустая и достаточно длинная
+        if len(joke_text) < MIN_JOKE_LENGTH:
+            logger.warning(f"Слишком короткая шутка в теме '{topic}': {joke_text}")
+            return
         try:
             await bot.send_message(
                 chat_id=CHAT_ID,
