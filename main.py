@@ -29,8 +29,8 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
-# Модель для генерации (пока прежняя, после проверки /models сможем заменить)
-MODEL_NAME = "qwen/qwen3.8-27b"
+# Модель для генерации — проверено, доступна
+MODEL_NAME = "openai/gpt-oss-20b"
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
