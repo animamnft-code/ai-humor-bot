@@ -29,10 +29,9 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
-MIN_JOKE_LENGTH = 15  # снизили с 30
+MIN_JOKE_LENGTH = 30
 
-# Модель для генерации (сменили)
-MODEL_NAME = "qwen/qwen3.6-27b"  # более стабильная
+MODEL_NAME = "openai/gpt-oss-20b"
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
@@ -87,7 +86,6 @@ EXAMPLES_FILE = "examples.json"
 BOT_USERNAME = None
 LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")
 
-# Счётчик публикаций (для кнопки "Хочу ещё!")
 post_counter = 0
 
 examples = {}
@@ -187,7 +185,7 @@ def check_daily_invite_limit(user_id):
 def increment_invite_count(user_id):
     today = date.today().isoformat()
     user_data = get_user_data(user_id)
-    if user_data.get("last_invvite_date") != today:
+    if user_data.get("last_invite_date") != today:
         user_data["invites_today"] = 0
         user_data["last_invite_date"] = today
     user_data["invites_today"] = user_data.get("invites_today", 0) + 1
@@ -232,6 +230,17 @@ def increment_more_button_count(user_id):
 def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
     return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
+
+def clean_joke_text(text):
+    """Очищает текст от нежелательных HTML-тегов и артефактов."""
+    if not text:
+        return ""
+    # Удаляем блоки <think>...</think>
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # Удаляем любые другие HTML-теги, кроме <i> и <b> (если они нужны)
+    text = re.sub(r'<(?!\/?i\b|\/?b\b)[^>]+>', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 # ===== ФУНКЦИИ ПРАЗДНИКОВ И СОБЫТИЙ =====
 def get_current_holiday():
@@ -286,7 +295,7 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка получения моделей: {e}")
         await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
 
-# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками и фолбэком) =====
+# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками и очисткой) =====
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
@@ -314,11 +323,10 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
         "Для диалогов указывай, кому адресована каждая реплика. "
         "Используй максимум одну метафору на шутку. "
-        "Ответ должен содержать не менее 15 символов. "
+        "Ответ должен содержать не менее 30 символов. "
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    # Повторяем до 3 раз, если шутка короче 15 символов
     for attempt in range(3):
         try:
             response = groq_client.chat.completions.create(
@@ -331,10 +339,12 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
                 max_tokens=max_tokens,
             )
             raw = response.choices[0].message.content.strip()
+            # Удаляем тег [ТЕМА: ...]
             joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
+            # Удаляем хэштеги
             joke_text = re.sub(r'#\S+', '', joke_text).strip()
-            joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
-            joke_text = joke_text.strip()
+            # Удаляем Markdown и HTML-теги через clean_joke_text
+            joke_text = clean_joke_text(joke_text)
 
             if len(joke_text) >= MIN_JOKE_LENGTH:
                 emoji = TOPIC_EMOJI.get(topic, "😄")
@@ -345,16 +355,6 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
                 logger.warning(f"Попытка {attempt+1}: шутка короче {MIN_JOKE_LENGTH} символов")
         except Exception as e:
             logger.error(f"Ошибка генерации (попытка {attempt+1}): {e}")
-    
-    # Фолбэк: если после 3 попыток не получилось, берём случайную шутку из examples.json
-    if format_examples:
-        fallback = random.choice(format_examples)
-        emoji = TOPIC_EMOJI.get(topic, "😄")
-        if hashtag and hashtag not in fallback:
-            fallback += f"\n\n<i>{hashtag}</i>"
-        logger.info("Использован фолбэк из examples.json")
-        return f"{emoji} {fallback}"
-    
     return None
 
 # ===== ОТПРАВКА ОПИСАНИЯ В ТЕМУ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
@@ -766,6 +766,11 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
     if joke_text:
+        # Дополнительная очистка перед отправкой
+        joke_text = clean_joke_text(joke_text)
+        if len(joke_text) < MIN_JOKE_LENGTH:
+            logger.warning(f"Шутка после очистки короче {MIN_JOKE_LENGTH} символов, пропускаем")
+            return
         post_counter += 1
         keyboard = None
         if post_counter % 5 == 0:
