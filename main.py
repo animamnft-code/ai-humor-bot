@@ -462,6 +462,29 @@ async def send_invite_with_photo(user_id):
         except Exception as e2:
             logger.error(f"Не удалось отправить даже текст: {e2}")
 
+# ===== НАСТРОЙКА ЗАКРЕПЛЁННЫХ КНОПОК В ТЕМАХ =====
+async def setup_forum_buttons():
+    """Отправляет закреплённое сообщение с кнопками в каждую тему."""
+    for topic, thread_id in TOPIC_IDS.items():
+        try:
+            text = f"Управление темой «{topic}»"
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}"),
+                    InlineKeyboardButton("Меню", callback_data="menu")
+                ]
+            ])
+            message = await bot.send_message(
+                chat_id=CHAT_ID,
+                text=text,
+                message_thread_id=thread_id,
+                reply_markup=keyboard
+            )
+            await bot.pin_message(chat_id=CHAT_ID, message_id=message.message_id, disable_notification=True)
+            logger.info(f"Закреплённое сообщение с кнопками отправлено в тему '{topic}' (ID {thread_id})")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке закреплённого сообщения в тему '{topic}': {e}")
+
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -509,22 +532,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
-    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема:формат")
+    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
     if query.data.startswith("more:"):
-        parts = query.data.split(":")
-        if len(parts) == 3:
-            topic = parts[1]
-            format_type = parts[2]
-        else:
-            topic = parts[1]
-            format_type = None
+        topic = query.data.split(":", 1)[1]
 
         if not check_more_button_limit(user.id):
             await query.answer("На сегодня лимит дополнительных шуток исчерпан (5 из 5). Лимит обнулится в следующие сутки. Сегодня новые посты продолжат публиковаться автоматически в разных темах.", show_alert=True)
             return
         increment_more_button_count(user.id)
         await query.answer()
-        joke = await asyncio.to_thread(generate_joke_sync, topic, format_type)
+        joke = await asyncio.to_thread(generate_joke_sync, topic)
         if joke:
             thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[list(TOPIC_IDS.keys())[0]])
             await bot.send_message(
@@ -535,9 +552,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_notification=True,
                 parse_mode='HTML'
             )
-            logger.info(f"Дополнительная шутка в теме '{topic}' (формат {format_type})")
+            logger.info(f"Дополнительная шутка в теме '{topic}' (без кнопок)")
         else:
             await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
+        return
+
+    # Обработка кнопки "Меню" (показывает список тем)
+    if query.data == "menu":
+        await query.answer()
+        # Создаём кнопки с URL на темы (переход в тему)
+        keyboard = []
+        for topic, thread_id in TOPIC_IDS.items():
+            url = f"https://t.me/ai_umor_24/{thread_id}"
+            keyboard.append([InlineKeyboardButton(f"{TOPIC_EMOJI.get(topic, '')} {topic}", url=url)])
+        # Добавляем кнопку закрытия меню
+        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
+        await query.edit_message_text("Выберите тему:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # Обработка закрытия меню
+    if query.data == "close_menu":
+        await query.answer()
+        await query.edit_message_text("Меню закрыто.")
         return
 
     if query.data == "invite_from_topic":
@@ -777,9 +813,6 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, format_type, holiday=holiday, event=event)
     if joke_text:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}:{format_type}")]
-        ])
         try:
             await bot.send_message(
                 chat_id=CHAT_ID,
@@ -787,10 +820,9 @@ async def publish_joke():
                 message_thread_id=thread_id,
                 disable_web_page_preview=True,
                 disable_notification=True,
-                parse_mode='HTML',
-                reply_markup=keyboard
+                parse_mode='HTML'
             )
-            logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id})")
+            logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id}) без кнопок")
         except TelegramError as e:
             logger.error(f"Ошибка публикации: {e}")
 
@@ -843,6 +875,9 @@ async def main():
     
     await application.initialize()
     await application.start()
+    
+    # Отправляем закреплённые кнопки в каждую тему
+    await setup_forum_buttons()
     
     await send_personal_topic_description()
     
