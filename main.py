@@ -28,12 +28,10 @@ else:
 
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
+MAX_MORE_BUTTON_CLICKS_PER_DAY = 5  # лимит нажатий кнопки "Хочу ещё!"
 
-# Минимальная длина шутки (символов)
-MIN_JOKE_LENGTH = 10  # снизили, чтобы не отсекать короткие, но не пустые
-
-# Модель для генерации (можно переопределить через переменную окружения)
-MODEL_NAME = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")  # по умолчанию рабочая
+# Модель для генерации
+MODEL_NAME = "openai/gpt-oss-20b"
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
@@ -44,18 +42,18 @@ FORMAT_HASHTAGS = {
     "диалог": "#диалоги",
 }
 FORMAT_MAX_TOKENS = {
-    "анекдот": 300,
-    "вопрос-ответ": 250,
-    "игра слов": 200,
-    "смешное определение": 250,
-    "диалог": 300,
+    "анекдот": 250,
+    "вопрос-ответ": 200,
+    "игра слов": 180,
+    "смешное определение": 200,
+    "диалог": 220,
 }
 FORMAT_MAX_CHARS = {
-    "анекдот": 400,
-    "вопрос-ответ": 350,
-    "игра слов": 300,
-    "смешное определение": 350,
-    "диалог": 400,
+    "анекдот": 350,
+    "вопрос-ответ": 300,
+    "игра слов": 250,
+    "смешное определение": 300,
+    "диалог": 350,
 }
 TOPIC_IDS = {
     "быт": 2, "работа": 5, "отношения": 12, "деньги": 15, "еда": 17,
@@ -87,6 +85,9 @@ CONFIG_FILE = "config.json"
 EXAMPLES_FILE = "examples.json"
 BOT_USERNAME = None
 LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")
+
+# Счётчик публикаций (для кнопки "Хочу ещё!")
+post_counter = 0
 
 examples = {}
 
@@ -138,7 +139,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False}
+    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False, "more_limits": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -209,6 +210,24 @@ def increment_joke_count(user_id):
         user_data["last_joke_date"] = today
     user_data["jokes_today"] = user_data.get("jokes_today", 0) + 1
     save_user_data(user_id, user_data)
+
+# Лимиты для кнопки "Хочу ещё!"
+def check_more_button_limit(user_id):
+    today = date.today().isoformat()
+    user_data = data.get("more_limits", {}).get(str(user_id), {})
+    if user_data.get("date") != today:
+        user_data = {"date": today, "clicks": 0}
+    return user_data.get("clicks", 0) < MAX_MORE_BUTTON_CLICKS_PER_DAY
+
+def increment_more_button_count(user_id):
+    today = date.today().isoformat()
+    more_limits = data.setdefault("more_limits", {})
+    user_data = more_limits.get(str(user_id), {})
+    if user_data.get("date") != today:
+        user_data = {"date": today, "clicks": 0}
+    user_data["clicks"] += 1
+    more_limits[str(user_id)] = user_data
+    save_data(data)
 
 def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
@@ -298,40 +317,34 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    # Пробуем до 3 раз, если ответ пустой или слишком короткий
-    for attempt in range(3):
-        try:
-            response = groq_client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=max_tokens,
-            )
-            raw = response.choices[0].message.content.strip()
-            joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
-            joke_text = re.sub(r'#\S+', '', joke_text).strip()
-            joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
-            joke_text = joke_text.strip()
+    try:
+        response = groq_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=max_tokens,
+        )
+        raw = response.choices[0].message.content.strip()
+        joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
+        joke_text = re.sub(r'#\S+', '', joke_text).strip()
+        joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
+        joke_text = joke_text.strip()
 
-            # Если текст пустой или слишком короткий, пробуем ещё раз
-            if len(joke_text) < MIN_JOKE_LENGTH:
-                logger.warning(f"Попытка {attempt+1}: шутка слишком короткая: '{joke_text}'")
-                continue
-
-            emoji = TOPIC_EMOJI.get(topic, "😄")
-            if hashtag and hashtag not in joke_text:
-                joke_text += f"\n\n<i>{hashtag}</i>"
-            return f"{emoji} {joke_text}"
-        except Exception as e:
-            logger.error(f"Ошибка генерации: {e}")
+        # Проверяем длину основного текста
+        if len(joke_text) < 30:
+            logger.warning(f"Шутка короче 30 символов: {joke_text}")
             return None
 
-    # Если все попытки не удались
-    logger.error(f"Не удалось сгенерировать шутку после 3 попыток. Тема: {topic}, формат: {format_type}")
-    return None
+        emoji = TOPIC_EMOJI.get(topic, "😄")
+        if hashtag and hashtag not in joke_text:
+            joke_text += f"\n\n<i>{hashtag}</i>"
+        return f"{emoji} {joke_text}"
+    except Exception as e:
+        logger.error(f"Ошибка генерации: {e}")
+        return None
 
 # ===== ОТПРАВКА ОПИСАНИЯ В ТЕМУ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
 async def send_personal_topic_description():
@@ -491,6 +504,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = get_user_data(user.id)
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
+
+    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
+    if query.data.startswith("more:"):
+        topic = query.data.split(":", 1)[1]
+        if not check_more_button_limit(user.id):
+            await query.answer("Вы уже получили максимальное количество дополнительных шуток сегодня.", show_alert=True)
+            return
+        increment_more_button_count(user.id)
+        joke = await asyncio.to_thread(generate_joke_sync, topic)
+        if joke:
+            await query.message.reply_text(joke, parse_mode='HTML')
+        else:
+            await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
+        return
 
     if query.data == "invite_from_topic":
         if not await check_is_member(user.id):
@@ -715,6 +742,7 @@ async def handle_logo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== ПЛАНИРОВЩИК ПУБЛИКАЦИЙ =====
 async def publish_joke():
+    global post_counter
     topic = random.choice(list(TOPIC_IDS.keys()))
     thread_id = TOPIC_IDS[topic]
     
@@ -728,6 +756,13 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
     if joke_text:
+        post_counter += 1
+        # Если каждый 5-й пост – добавляем кнопку "Хочу ещё!"
+        keyboard = None
+        if post_counter % 5 == 0:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}")]
+            ])
         try:
             await bot.send_message(
                 chat_id=CHAT_ID,
@@ -735,7 +770,8 @@ async def publish_joke():
                 message_thread_id=thread_id,
                 disable_web_page_preview=True,
                 disable_notification=True,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
             logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id})")
         except TelegramError as e:
