@@ -30,7 +30,7 @@ MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 
 # Минимальная длина шутки (символов)
-MIN_JOKE_LENGTH = 20
+MIN_JOKE_LENGTH = 30
 
 # Модель для генерации
 MODEL_NAME = "openai/gpt-oss-20b"
@@ -313,6 +313,12 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         joke_text = re.sub(r'#\S+', '', joke_text).strip()
         joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
         joke_text = joke_text.strip()
+
+        # Проверяем длину основного текста (без эмодзи и хэштега)
+        if len(joke_text) < MIN_JOKE_LENGTH:
+            logger.warning(f"Шутка короче {MIN_JOKE_LENGTH} символов: {joke_text}")
+            return None
+
         emoji = TOPIC_EMOJI.get(topic, "😄")
         if hashtag and hashtag not in joke_text:
             joke_text += f"\n\n<i>{hashtag}</i>"
@@ -716,10 +722,6 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
     if joke_text:
-        # Проверяем, что шутка не пустая и достаточно длинная
-        if len(joke_text) < MIN_JOKE_LENGTH:
-            logger.warning(f"Слишком короткая шутка в теме '{topic}': {joke_text}")
-            return
         try:
             await bot.send_message(
                 chat_id=CHAT_ID,
