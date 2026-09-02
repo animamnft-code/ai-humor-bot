@@ -28,7 +28,7 @@ else:
 
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
-MAX_MORE_BUTTON_CLICKS_PER_DAY = 5  # лимит нажатий "Хочу ещё!"
+MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
 MIN_JOKE_LENGTH = 20
 
 # Модель для генерации (стабильная)
@@ -212,9 +212,13 @@ def increment_joke_count(user_id):
 # Лимиты для кнопки "Хочу ещё!"
 def check_more_button_limit(user_id):
     today = date.today().isoformat()
-    user_data = data.get("more_limits", {}).get(str(user_id), {})
+    more_limits = data.setdefault("more_limits", {})
+    user_data = more_limits.get(str(user_id), {})
     if user_data.get("date") != today:
         user_data = {"date": today, "clicks": 0}
+        more_limits[str(user_id)] = user_data
+        save_data(data)
+    logger.info(f"Лимит 'Хочу ещё!' для {user_id}: {user_data.get('clicks', 0)} из {MAX_MORE_BUTTON_CLICKS_PER_DAY}")
     return user_data.get("clicks", 0) < MAX_MORE_BUTTON_CLICKS_PER_DAY
 
 def increment_more_button_count(user_id):
@@ -226,6 +230,7 @@ def increment_more_button_count(user_id):
     user_data["clicks"] += 1
     more_limits[str(user_id)] = user_data
     save_data(data)
+    logger.info(f"Увеличено количество нажатий для {user_id}: {user_data.get('clicks', 0)} из {MAX_MORE_BUTTON_CLICKS_PER_DAY}")
 
 def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
@@ -499,7 +504,6 @@ async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     user = query.from_user
     user_data = get_user_data(user.id)
     settings = user_data.get("settings", {})
@@ -516,12 +520,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             format_type = None
 
         if not check_more_button_limit(user.id):
-            await query.answer(
-                "Вы сегодня уже получили 5 дополнительных шуток. Лимит исчерпан. Возвращайтесь завтра!",
-                show_alert=True
-            )
+            await query.answer("Вы сегодня уже получили 5 дополнительных шуток. Лимит исчерпан. Возвращайтесь завтра!", show_alert=True)
             return
         increment_more_button_count(user.id)
+        await query.answer()  # закрываем кнопку
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type)
         if joke:
             thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[list(TOPIC_IDS.keys())[0]])
@@ -540,6 +542,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Обработка кнопки "Меню"
     if query.data == "menu":
+        await query.answer()
         keyboard = [
             [InlineKeyboardButton("🎭 Персональный юмор", callback_data="menu_personal")],
             [InlineKeyboardButton("📚 Темы", callback_data="menu_topics")],
@@ -550,13 +553,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Обработка пунктов меню
     if query.data == "menu_personal":
+        await query.answer()
         await query.edit_message_text("Откройте бота в личке и введите /personal, чтобы настроить персональный юмор.")
         return
     if query.data == "menu_topics":
+        await query.answer()
         topics_list = "\n".join([f"{TOPIC_EMOJI[t]} {t}" for t in TOPIC_IDS.keys()])
         await query.edit_message_text(f"Доступные темы:\n{topics_list}")
         return
     if query.data == "menu_about":
+        await query.answer()
         await query.edit_message_text("ЮМОР от AI — автоматизированная группа с юмором. Шутки публикуются каждые 15 минут. Подписывайтесь и смейтесь!")
         return
 
@@ -785,7 +791,7 @@ async def handle_logo_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def publish_joke():
     topic = random.choice(list(TOPIC_IDS.keys()))
     thread_id = TOPIC_IDS[topic]
-    format_type = random.choice(FORMATS)  # выбираем формат заранее
+    format_type = random.choice(FORMATS)
 
     holiday = None
     if random.random() < get_holiday_bias():
@@ -797,7 +803,6 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, format_type, holiday=holiday, event=event)
     if joke_text:
-        # Добавляем кнопки: Хочу ещё! и Меню
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}:{format_type}"),
