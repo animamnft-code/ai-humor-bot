@@ -236,15 +236,26 @@ def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
     return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
 
-# Функция отправки с повторами
+# Функция отправки с повторами и обработкой Flood control
 async def send_message_with_retry(chat_id, text, **kwargs):
-    """Отправляет сообщение с повторами до 3 раз при ошибке."""
+    """Отправляет сообщение с повторами до 3 раз при ошибке, учитывая Flood control."""
     for attempt in range(3):
         try:
             return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         except TelegramError as e:
             logger.error(f"Ошибка отправки (попытка {attempt+1}): {e}")
-            if attempt < 2:
+            # Если это Flood control, ждём указанное время
+            if "Flood control" in str(e):
+                # Извлекаем количество секунд
+                import re
+                match = re.search(r"Retry in (\d+) seconds", str(e))
+                if match:
+                    retry_after = int(match.group(1))
+                    logger.info(f"Flood control: ожидаю {retry_after} секунд")
+                    await asyncio.sleep(retry_after + 1)
+                else:
+                    await asyncio.sleep(10)
+            else:
                 await asyncio.sleep(3)
     raise TelegramError("Не удалось отправить сообщение после 3 попыток")
 
@@ -414,7 +425,7 @@ async def send_personal_topic_description():
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        await bot.send_message(
+        await send_message_with_retry(
             chat_id=CHAT_ID,
             text=text,
             message_thread_id=PERSONAL_TOPIC_ID,
@@ -501,8 +512,8 @@ async def setup_forum_buttons():
                 break
             except Exception as e:
                 logger.error(f"Попытка {attempt+1} не удалась для темы '{topic}': {e}")
-                await asyncio.sleep(3)
-        await asyncio.sleep(3)
+                await asyncio.sleep(5)  # увеличиваем паузу до 5 секунд
+        await asyncio.sleep(5)  # пауза между темами теперь 5 секунд
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -894,7 +905,11 @@ async def main():
     await application.initialize()
     await application.start()
     
+    # Сначала отправляем кнопки с паузами 5 секунд между темами
     await setup_forum_buttons()
+    
+    # Даём Telegram время "отдохнуть" после 10 закреплений
+    await asyncio.sleep(15)
     
     await send_personal_topic_description()
     
