@@ -153,7 +153,8 @@ load_config()
 load_examples()
 data = load_data()
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+# Устанавливаем таймаут 30 секунд для всех запросов
+bot = Bot(token=TELEGRAM_BOT_TOKEN, timeout=30)
 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
@@ -235,6 +236,18 @@ def increment_more_button_count(user_id):
 def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
     return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
+
+# Функция отправки с повторами
+async def send_message_with_retry(chat_id, text, **kwargs):
+    """Отправляет сообщение с повторами до 3 раз при ошибке."""
+    for attempt in range(3):
+        try:
+            return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        except TelegramError as e:
+            logger.error(f"Ошибка отправки (попытка {attempt+1}): {e}")
+            if attempt < 2:
+                await asyncio.sleep(3)
+    raise TelegramError("Не удалось отправить сообщение после 3 попыток")
 
 # ===== ФУНКЦИИ ПРАЗДНИКОВ И СОБЫТИЙ =====
 def get_current_holiday():
@@ -466,7 +479,7 @@ async def send_invite_with_photo(user_id):
 async def setup_forum_buttons():
     """Отправляет и закрепляет сообщение с кнопками в каждую тему с паузами."""
     for topic, thread_id in TOPIC_IDS.items():
-        for attempt in range(3):  # до 3 попыток
+        for attempt in range(3):
             try:
                 text = f"Управление темой «{topic}»"
                 keyboard = InlineKeyboardMarkup([
@@ -481,17 +494,16 @@ async def setup_forum_buttons():
                     message_thread_id=thread_id,
                     reply_markup=keyboard
                 )
-                # Пытаемся закрепить, но не прерываемся при ошибке
                 try:
                     await bot.pin_chat_message(chat_id=CHAT_ID, message_id=message.message_id, disable_notification=True)
                     logger.info(f"Закреплено в теме '{topic}' (ID {thread_id})")
                 except Exception as pin_error:
                     logger.warning(f"Не удалось закрепить в теме '{topic}': {pin_error}")
-                break  # успех – выходим из цикла попыток
+                break
             except Exception as e:
                 logger.error(f"Попытка {attempt+1} не удалась для темы '{topic}': {e}")
-                await asyncio.sleep(3)  # пауза перед повторной попыткой
-        await asyncio.sleep(3)  # пауза между темами
+                await asyncio.sleep(3)
+        await asyncio.sleep(3)
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -540,7 +552,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
-    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
     if query.data.startswith("more:"):
         topic = query.data.split(":", 1)[1]
 
@@ -552,33 +563,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         joke = await asyncio.to_thread(generate_joke_sync, topic)
         if joke:
             thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[list(TOPIC_IDS.keys())[0]])
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=joke,
-                message_thread_id=thread_id,
-                disable_web_page_preview=True,
-                disable_notification=True,
-                parse_mode='HTML'
-            )
-            logger.info(f"Дополнительная шутка в теме '{topic}' (без кнопок)")
+            try:
+                await send_message_with_retry(
+                    chat_id=CHAT_ID,
+                    text=joke,
+                    message_thread_id=thread_id,
+                    disable_web_page_preview=True,
+                    disable_notification=True,
+                    parse_mode='HTML'
+                )
+                logger.info(f"Дополнительная шутка в теме '{topic}' (без кнопок)")
+            except TelegramError as e:
+                logger.error(f"Ошибка отправки дополнительной шутки: {e}")
+                await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
         else:
             await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
         return
 
-    # Обработка кнопки "Меню" (показывает список тем)
     if query.data == "menu":
         await query.answer()
-        # Создаём кнопки с URL на темы (переход в тему)
         keyboard = []
         for topic, thread_id in TOPIC_IDS.items():
             url = f"https://t.me/ai_umor_24/{thread_id}"
             keyboard.append([InlineKeyboardButton(f"{TOPIC_EMOJI.get(topic, '')} {topic}", url=url)])
-        # Добавляем кнопку закрытия меню
         keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
         await query.edit_message_text("Выберите тему:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Обработка закрытия меню
     if query.data == "close_menu":
         await query.answer()
         await query.edit_message_text("Меню закрыто.")
@@ -822,7 +833,7 @@ async def publish_joke():
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, format_type, holiday=holiday, event=event)
     if joke_text:
         try:
-            await bot.send_message(
+            await send_message_with_retry(
                 chat_id=CHAT_ID,
                 text=joke_text,
                 message_thread_id=thread_id,
@@ -884,7 +895,6 @@ async def main():
     await application.initialize()
     await application.start()
     
-    # Отправляем и закрепляем кнопки в каждой теме с паузами
     await setup_forum_buttons()
     
     await send_personal_topic_description()
