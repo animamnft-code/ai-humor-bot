@@ -31,6 +31,7 @@ MAX_PERSONAL_JOKES_PER_DAY = 10
 MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
 MIN_JOKE_LENGTH = 30
 
+# Модель для генерации
 MODEL_NAME = "openai/gpt-oss-20b"
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
@@ -86,6 +87,7 @@ EXAMPLES_FILE = "examples.json"
 BOT_USERNAME = None
 LOGO_FILE_ID = os.getenv("LOGO_FILE_ID")
 
+# Счётчик публикаций (для кнопки "Хочу ещё!")
 post_counter = 0
 
 examples = {}
@@ -231,17 +233,6 @@ def get_share_url(ref_link):
     text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
     return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
 
-def clean_joke_text(text):
-    """Очищает текст от нежелательных HTML-тегов и артефактов."""
-    if not text:
-        return ""
-    # Удаляем блоки <think>...</think>
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    # Удаляем любые другие HTML-теги, кроме <i> и <b> (если они нужны)
-    text = re.sub(r'<(?!\/?i\b|\/?b\b)[^>]+>', '', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
 # ===== ФУНКЦИИ ПРАЗДНИКОВ И СОБЫТИЙ =====
 def get_current_holiday():
     today = datetime.now()
@@ -295,7 +286,7 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка получения моделей: {e}")
         await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
 
-# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками и очисткой) =====
+# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками и очисткой HTML) =====
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
@@ -324,27 +315,29 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Для диалогов указывай, кому адресована каждая реплика. "
         "Используй максимум одну метафору на шутку. "
         "Ответ должен содержать не менее 30 символов. "
+        "Не используй HTML-теги, особенно <think>. Пиши только чистый текст. "
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
+    # Повторяем до 3 раз, если шутка короче 30 символов или содержит HTML-теги
     for attempt in range(3):
         try:
             response = groq_client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
-                    {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно."},
+                    {"role": "system", "content": "Ты - генератор юмора. Пиши смешно и законченно. Не используй HTML-теги."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
                 max_tokens=max_tokens,
             )
             raw = response.choices[0].message.content.strip()
-            # Удаляем тег [ТЕМА: ...]
-            joke_text = re.sub(r"\[ТЕМА:.*?\]", "", raw, flags=re.IGNORECASE).strip()
-            # Удаляем хэштеги
+            # Удаляем HTML-теги (think, /think и любые другие)
+            joke_text = re.sub(r"<[^>]+>", "", raw)
+            joke_text = re.sub(r"\[ТЕМА:.*?\]", "", joke_text, flags=re.IGNORECASE).strip()
             joke_text = re.sub(r'#\S+', '', joke_text).strip()
-            # Удаляем Markdown и HTML-теги через clean_joke_text
-            joke_text = clean_joke_text(joke_text)
+            joke_text = re.sub(r'\*\*|__|\*|_', '', joke_text).strip()
+            joke_text = joke_text.strip()
 
             if len(joke_text) >= MIN_JOKE_LENGTH:
                 emoji = TOPIC_EMOJI.get(topic, "😄")
@@ -516,6 +509,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
+    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
     if query.data.startswith("more:"):
         topic = query.data.split(":", 1)[1]
         if not check_more_button_limit(user.id):
@@ -766,11 +760,6 @@ async def publish_joke():
     
     joke_text = await asyncio.to_thread(generate_joke_sync, topic, holiday=holiday, event=event)
     if joke_text:
-        # Дополнительная очистка перед отправкой
-        joke_text = clean_joke_text(joke_text)
-        if len(joke_text) < MIN_JOKE_LENGTH:
-            logger.warning(f"Шутка после очистки короче {MIN_JOKE_LENGTH} символов, пропускаем")
-            return
         post_counter += 1
         keyboard = None
         if post_counter % 5 == 0:
