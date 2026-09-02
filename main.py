@@ -29,10 +29,10 @@ else:
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
 MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
-MIN_JOKE_LENGTH = 30
+MIN_JOKE_LENGTH = 15  # снизили с 30
 
-# Модель для генерации
-MODEL_NAME = "openai/gpt-oss-20b"
+# Модель для генерации (сменили)
+MODEL_NAME = "qwen/qwen3.6-27b"  # более стабильная
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
 FORMAT_HASHTAGS = {
@@ -187,7 +187,7 @@ def check_daily_invite_limit(user_id):
 def increment_invite_count(user_id):
     today = date.today().isoformat()
     user_data = get_user_data(user_id)
-    if user_data.get("last_invite_date") != today:
+    if user_data.get("last_invvite_date") != today:
         user_data["invites_today"] = 0
         user_data["last_invite_date"] = today
     user_data["invites_today"] = user_data.get("invites_today", 0) + 1
@@ -286,7 +286,7 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка получения моделей: {e}")
         await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
 
-# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками) =====
+# ===== ГЕНЕРАЦИЯ ШУТКИ (с повторными попытками и фолбэком) =====
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
         format_type = random.choice(FORMATS)
@@ -314,11 +314,11 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Следи за логикой: каждая реплика должна быть последовательной, без необъяснимых образов. "
         "Для диалогов указывай, кому адресована каждая реплика. "
         "Используй максимум одну метафору на шутку. "
-        "Ответ должен содержать не менее 30 символов. "
+        "Ответ должен содержать не менее 15 символов. "
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    # Повторяем до 3 раз, если шутка короче 30 символов
+    # Повторяем до 3 раз, если шутка короче 15 символов
     for attempt in range(3):
         try:
             response = groq_client.chat.completions.create(
@@ -345,6 +345,16 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
                 logger.warning(f"Попытка {attempt+1}: шутка короче {MIN_JOKE_LENGTH} символов")
         except Exception as e:
             logger.error(f"Ошибка генерации (попытка {attempt+1}): {e}")
+    
+    # Фолбэк: если после 3 попыток не получилось, берём случайную шутку из examples.json
+    if format_examples:
+        fallback = random.choice(format_examples)
+        emoji = TOPIC_EMOJI.get(topic, "😄")
+        if hashtag and hashtag not in fallback:
+            fallback += f"\n\n<i>{hashtag}</i>"
+        logger.info("Использован фолбэк из examples.json")
+        return f"{emoji} {fallback}"
+    
     return None
 
 # ===== ОТПРАВКА ОПИСАНИЯ В ТЕМУ «ПЕРСОНАЛЬНЫЙ ЮМОР» =====
@@ -506,7 +516,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
-    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
     if query.data.startswith("more:"):
         topic = query.data.split(":", 1)[1]
         if not check_more_button_limit(user.id):
