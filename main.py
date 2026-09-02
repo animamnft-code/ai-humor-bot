@@ -28,7 +28,7 @@ else:
 
 MAX_INVITES_PER_DAY = 10
 MAX_PERSONAL_JOKES_PER_DAY = 10
-MIN_JOKE_LENGTH = 20  # минимальная длина шутки
+MIN_JOKE_LENGTH = 20
 
 # Модель для генерации (стабильная)
 MODEL_NAME = "qwen/qwen3.8-27b"
@@ -41,12 +41,13 @@ FORMAT_HASHTAGS = {
     "смешное определение": "#смешные_определения",
     "диалог": "#диалоги",
 }
+# Увеличенные лимиты токенов для предотвращения обрывов
 FORMAT_MAX_TOKENS = {
-    "анекдот": 250,
-    "вопрос-ответ": 200,
-    "игра слов": 180,
-    "смешное определение": 200,
-    "диалог": 220,
+    "анекдот": 400,
+    "вопрос-ответ": 350,
+    "игра слов": 300,
+    "смешное определение": 350,
+    "диалог": 400,
 }
 FORMAT_MAX_CHARS = {
     "анекдот": 350,
@@ -245,7 +246,7 @@ def get_random_event():
         return random.choice(CURRENT_EVENTS)
     return None
 
-# ===== КОМАНДА ДЛЯ ПРОВЕРКИ ДОСТУПНЫХ МОДЕЛЕЙ (оставим на всякий случай) =====
+# ===== КОМАНДА ДЛЯ ПРОВЕРКИ ДОСТУПНЫХ МОДЕЛЕЙ =====
 async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != ADMIN_USER_ID:
@@ -298,7 +299,6 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
         "Без Markdown и HTML. В конце добавь тег [ТЕМА: " + topic + "] и хэштег " + hashtag + "."
     )
 
-    # Повторяем до 3 раз, если шутка короче 20 символов
     for attempt in range(3):
         try:
             response = groq_client.chat.completions.create(
@@ -311,7 +311,6 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
                 max_tokens=max_tokens,
             )
             raw = response.choices[0].message.content.strip()
-            # Удаляем HTML-теги
             joke_text = re.sub(r"<[^>]+>", "", raw)
             joke_text = re.sub(r"\[ТЕМА:.*?\]", "", joke_text, flags=re.IGNORECASE).strip()
             joke_text = re.sub(r'#\S+', '', joke_text).strip()
