@@ -31,7 +31,6 @@ MAX_PERSONAL_JOKES_PER_DAY = 10
 MAX_MORE_BUTTON_CLICKS_PER_DAY = 5
 MIN_JOKE_LENGTH = 20
 
-# Модель для генерации (стабильная)
 MODEL_NAME = "qwen/qwen3.8-27b"
 
 FORMATS = ["анекдот", "вопрос-ответ", "игра слов", "смешное определение", "диалог"]
@@ -209,7 +208,6 @@ def increment_joke_count(user_id):
     user_data["jokes_today"] = user_data.get("jokes_today", 0) + 1
     save_user_data(user_id, user_data)
 
-# Лимиты для кнопки "Хочу ещё!"
 def check_more_button_limit(user_id):
     today = date.today().isoformat()
     more_limits = data.setdefault("more_limits", {})
@@ -509,7 +507,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
-    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема:формат")
     if query.data.startswith("more:"):
         parts = query.data.split(":")
         if len(parts) == 3:
@@ -522,25 +519,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not check_more_button_limit(user.id):
             await query.answer("Вы сегодня уже получили 5 дополнительных шуток. Лимит исчерпан. Возвращайтесь завтра!", show_alert=True)
             return
+
         increment_more_button_count(user.id)
-        await query.answer()  # закрываем кнопку
         joke = await asyncio.to_thread(generate_joke_sync, topic, format_type)
         if joke:
             thread_id = TOPIC_IDS.get(topic, TOPIC_IDS[list(TOPIC_IDS.keys())[0]])
+            # Добавляем кнопки к дополнительной шутке
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Хочу ещё!", callback_data=f"more:{topic}:{format_type}"),
+                    InlineKeyboardButton("Меню", callback_data="menu")
+                ]
+            ])
             await bot.send_message(
                 chat_id=CHAT_ID,
                 text=joke,
                 message_thread_id=thread_id,
                 disable_web_page_preview=True,
                 disable_notification=True,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=keyboard
             )
             logger.info(f"Дополнительная шутка в теме '{topic}' (формат {format_type})")
         else:
             await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
         return
 
-    # Обработка кнопки "Меню"
     if query.data == "menu":
         await query.answer()
         keyboard = [
@@ -551,7 +555,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Выберите пункт меню:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Обработка пунктов меню
     if query.data == "menu_personal":
         await query.answer()
         await query.edit_message_text("Откройте бота в личке и введите /personal, чтобы настроить персональный юмор.")
