@@ -592,6 +592,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Обработка кнопки "Меню" (отправляем НОВОЕ сообщение с меню, не редактируя закреплённое)
     if query.data == "menu":
         await query.answer()
+        # Удаляем предыдущее меню, если оно есть
+        old_menu_id = context.user_data.get("menu_message_id")
+        if old_menu_id:
+            try:
+                await bot.delete_message(chat_id=CHAT_ID, message_id=old_menu_id)
+            except Exception:
+                pass
+        
         # Создаём кнопки с URL на темы (переход в тему)
         keyboard = []
         for topic, thread_id in TOPIC_IDS.items():
@@ -600,12 +608,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Добавляем кнопку закрытия меню
         keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
         # Отправляем НОВОЕ сообщение в ту же тему
-        await bot.send_message(
+        sent_message = await bot.send_message(
             chat_id=CHAT_ID,
             text="Выберите тему:",
             message_thread_id=query.message.message_thread_id,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        # Сохраняем ID отправленного сообщения меню
+        context.user_data["menu_message_id"] = sent_message.message_id
         return
 
     # Обработка закрытия меню (удаляем сообщение с меню)
@@ -613,11 +623,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         # Удаляем сообщение, из которого вызван callback (оно с меню)
         try:
-            await bot.delete_message(
-                chat_id=CHAT_ID,
-                message_id=query.message.message_id,
-                message_thread_id=query.message.message_thread_id
-            )
+            await bot.delete_message(chat_id=CHAT_ID, message_id=query.message.message_id)
+            # Очищаем сохранённый ID
+            context.user_data.pop("menu_message_id", None)
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение меню: {e}")
         return
