@@ -867,9 +867,25 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception as e:
                     logger.error(f"Ошибка уведомления пригласившего: {e}")
         try:
-            text = "Добро пожаловать в группу! Теперь вы можете приглашать друзей и получать персональный юмор."
+            # --- НОВОЕ ПРИВЕТСТВЕННОЕ СООБЩЕНИЕ С HTML-ССЫЛКАМИ ---
+            welcome_text = (
+                '👋 Привет! Спасибо, что присоединились к группе: '
+                '<a href="https://t.me/ai_umor_24">«Центр юмора ИИ»</a>!\n\n'
+                'Здесь каждые 15 минут выходит свежая шутка на самые разные темы — от быта до абсурда. '
+                'А ещё есть <a href="https://t.me/ai_humor_458_bot">«Персональный юмор»</a>: настройте шутки под себя и получайте уникальный контент.\n\n'
+                'Чтобы активировать:\n'
+                '1. Нажмите «Пригласить контакт» (в этом чате или в группе).\n'
+                '2. Получите ссылку и отправьте её другу.\n'
+                '3. Когда друг вступит — вам откроются настройки.\n\n'
+                'Ставьте реакции, приглашайте друзей и делайте проект лучше вместе с нами! 😄'
+            )
             keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
-            await bot.send_message(chat_id=user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+            await bot.send_message(
+                chat_id=user.id,
+                text=welcome_text,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
             logger.info(f"Отправлено приветствие новому участнику {user.id}")
         except Exception as e:
             logger.error(f"Ошибка отправки приветствия: {e}")
@@ -984,7 +1000,7 @@ async def main():
     application.add_handler(CommandHandler("personal", personal_joke))
     application.add_handler(CommandHandler("setlogo", setlogo))
     application.add_handler(CommandHandler("models", models_command))
-    application.add_handler(CommandHandler("stats", stats_command))  # <--- новая команда
+    application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, handle_logo_photo))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
