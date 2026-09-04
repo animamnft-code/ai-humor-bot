@@ -233,7 +233,7 @@ def increment_more_button_count(user_id):
     logger.info(f"Увеличено количество нажатий для {user_id}: {user_data.get('clicks', 0)} из {MAX_MORE_BUTTON_CLICKS_PER_DAY}")
 
 def get_share_url(ref_link):
-    text = 'Присоединяйся к группе юмора: "ЮМОР от AI"!'
+    text = 'Присоединяйся к группе юмора: "Центр юмора ИИ"!'
     return "https://t.me/share/url?" + urlencode({"url": ref_link, "text": text})
 
 # Функция отправки с повторами и обработкой Flood control
@@ -244,9 +244,7 @@ async def send_message_with_retry(chat_id, text, **kwargs):
             return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         except TelegramError as e:
             logger.error(f"Ошибка отправки (попытка {attempt+1}): {e}")
-            # Если это Flood control, ждём указанное время
             if "Flood control" in str(e):
-                # Извлекаем количество секунд
                 import re
                 match = re.search(r"Retry in (\d+) seconds", str(e))
                 if match:
@@ -393,7 +391,7 @@ async def send_personal_topic_description():
         "Он не повторяется и учитывает ваши настройки: «Имя», «Тематика» и «Формат» юмора.\n\n"
         "📋 Условия и инструкции\n"
         "Чтобы получить персональный юмор, выполните четыре простых шага:\n"
-        "1. Вступите в группу ЮМОР от AI: https://t.me/ai_umor_24 , если ещё не являетесь её участником.\n"
+        "1. Вступите в группу «Центр юмора ИИ»: https://t.me/ai_umor_24 , если ещё не являетесь её участником.\n"
         "2. Нажмите кнопку ниже (или напишите боту /start), чтобы получить вашу персональную реферальную ссылку.\n"
         "3. Отправьте эту ссылку другу и дождитесь, когда он вступит в группу.\n"
         "4. Как только ваш друг вступит в группу, бот пришлёт вам в личные сообщения настройки «Персональный юмор» "
@@ -450,7 +448,7 @@ async def send_invite_with_photo(user_id):
 
         if LOGO_FILE_ID:
             caption = (
-                f'Присоединяйся к группе юмора: <a href="{ref_link}">"ЮМОР от AI"</a>!\n\n'
+                f'Присоединяйся к группе юмора: <a href="{ref_link}">"Центр юмора ИИ"</a>!\n\n'
                 f'Ваша реферальная ссылка: {ref_link}\n\n'
                 f'Отправьте это сообщение другу или используйте кнопку ниже.'
             )
@@ -463,7 +461,7 @@ async def send_invite_with_photo(user_id):
             )
         else:
             text = (
-                f'Присоединяйся к группе юмора: <a href="{ref_link}">"ЮМОР от AI"</a>!\n\n'
+                f'Присоединяйся к группе юмора: <a href="{ref_link}">"Центр юмора ИИ"</a>!\n\n'
                 f'Ваша реферальная ссылка: {ref_link}\n\n'
                 f'Отправьте это сообщение другу или используйте кнопку ниже.'
             )
@@ -512,8 +510,8 @@ async def setup_forum_buttons():
                 break
             except Exception as e:
                 logger.error(f"Попытка {attempt+1} не удалась для темы '{topic}': {e}")
-                await asyncio.sleep(5)  # увеличиваем паузу до 5 секунд
-        await asyncio.sleep(5)  # пауза между темами теперь 5 секунд
+                await asyncio.sleep(5)
+        await asyncio.sleep(5)
 
 # ===== ОБРАБОТЧИКИ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -536,8 +534,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_data(data)
     
     if update.effective_chat.type == "private":
-        text = ("Привет! Чтобы получить 'персональный юмор' нужно быть участником этой группы "
-                "https://t.me/ai_umor_24 и пригласить в эту группу нового пользователя.")
+        text = ("Привет! Чтобы получить 'персональный юмор' нужно быть участником группы "
+                "«Центр юмора ИИ»: https://t.me/ai_umor_24 и пригласить в эту группу нового пользователя.")
         keyboard = [[InlineKeyboardButton("Пригласить контакт", callback_data="invite_contact")]]
         user_data = get_user_data(user.id)
         if user_data.get("has_invited"):
@@ -905,10 +903,8 @@ async def main():
     await application.initialize()
     await application.start()
     
-    # Сначала отправляем кнопки с паузами 5 секунд между темами
     await setup_forum_buttons()
     
-    # Даём Telegram время "отдохнуть" после 10 закреплений
     await asyncio.sleep(15)
     
     await send_personal_topic_description()
