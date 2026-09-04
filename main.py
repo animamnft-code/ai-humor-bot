@@ -560,6 +560,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
+    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
     if query.data.startswith("more:"):
         topic = query.data.split(":", 1)[1]
 
@@ -588,19 +589,37 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
         return
 
+    # Обработка кнопки "Меню" (отправляем НОВОЕ сообщение с меню, не редактируя закреплённое)
     if query.data == "menu":
         await query.answer()
+        # Создаём кнопки с URL на темы (переход в тему)
         keyboard = []
         for topic, thread_id in TOPIC_IDS.items():
             url = f"https://t.me/ai_umor_24/{thread_id}"
             keyboard.append([InlineKeyboardButton(f"{TOPIC_EMOJI.get(topic, '')} {topic}", url=url)])
+        # Добавляем кнопку закрытия меню
         keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
-        await query.edit_message_text("Выберите тему:", reply_markup=InlineKeyboardMarkup(keyboard))
+        # Отправляем НОВОЕ сообщение в ту же тему
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="Выберите тему:",
+            message_thread_id=query.message.message_thread_id,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
+    # Обработка закрытия меню (удаляем сообщение с меню)
     if query.data == "close_menu":
         await query.answer()
-        await query.edit_message_text("Меню закрыто.")
+        # Удаляем сообщение, из которого вызван callback (оно с меню)
+        try:
+            await bot.delete_message(
+                chat_id=CHAT_ID,
+                message_id=query.message.message_id,
+                message_thread_id=query.message.message_thread_id
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение меню: {e}")
         return
 
     if query.data == "invite_from_topic":
