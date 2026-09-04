@@ -70,13 +70,17 @@ TOPIC_WEIGHTS = {
 }
 HOLIDAYS = [
     {"name": "Новый год", "month": 1, "day": 1},
+    {"name": "Крещение (купания)", "month": 1, "day": 19},
+    {"name": "День всех влюбленных", "month": 2, "day": 14},
     {"name": "День защитника Отечества", "month": 2, "day": 23},
     {"name": "Международный женский день", "month": 3, "day": 8},
     {"name": "День смеха", "month": 4, "day": 1},
-    {"name": "День Победы", "month": 5, "day": 9},
-    {"name": "День России", "month": 6, "day": 12},
+    {"name": "Всемирный день здоровья", "month": 4, "day": 7},
+    {"name": "День защиты детей", "month": 6, "day": 1},
     {"name": "День знаний", "month": 9, "day": 1},
-    {"name": "День народного единства", "month": 11, "day": 4},
+    {"name": "День учителя", "month": 10, "day": 5},
+    {"name": "Хэллоуин", "month": 10, "day": 31},
+    {"name": "День артиллериста", "month": 11, "day": 19}
 ]
 CURRENT_EVENTS = []
 EVENT_PROBABILITY = 0.15
@@ -101,21 +105,24 @@ def load_config():
     global FORMATS, FORMAT_HASHTAGS, FORMAT_MAX_TOKENS, TOPIC_IDS, TOPIC_EMOJI, TOPIC_WEIGHTS
     global HOLIDAYS, CURRENT_EVENTS, EVENT_PROBABILITY, LOGO_FILE_ID
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            config = json.load(f)
-            FORMATS = config.get("formats", FORMATS)
-            FORMAT_HASHTAGS = config.get("hashtags", FORMAT_HASHTAGS)
-            FORMAT_MAX_TOKENS = config.get("max_tokens", FORMAT_MAX_TOKENS)
-            TOPIC_IDS = config.get("topic_ids", TOPIC_IDS)
-            TOPIC_EMOJI = config.get("topic_emoji", TOPIC_EMOJI)
-            TOPIC_WEIGHTS = config.get("topic_weights", TOPIC_WEIGHTS)
-            HOLIDAYS = config.get("holidays", HOLIDAYS)
-            CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
-            EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
-            if not LOGO_FILE_ID:
-                LOGO_FILE_ID = config.get("logo_file_id", None)
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                FORMATS = config.get("formats", FORMATS)
+                FORMAT_HASHTAGS = config.get("hashtags", FORMAT_HASHTAGS)
+                FORMAT_MAX_TOKENS = config.get("max_tokens", FORMAT_MAX_TOKENS)
+                TOPIC_IDS = config.get("topic_ids", TOPIC_IDS)
+                TOPIC_EMOJI = config.get("topic_emoji", TOPIC_EMOJI)
+                TOPIC_WEIGHTS = config.get("topic_weights", TOPIC_WEIGHTS)
+                HOLIDAYS = config.get("holidays", HOLIDAYS)
+                CURRENT_EVENTS = config.get("current_events", CURRENT_EVENTS)
+                EVENT_PROBABILITY = config.get("event_probability", EVENT_PROBABILITY)
+                if not LOGO_FILE_ID:
+                    LOGO_FILE_ID = config.get("logo_file_id", None)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки config.json: {e}. Использую значения по умолчанию.")
     else:
-        pass
+        logger.warning("config.json не найден, использую значения по умолчанию.")
 
 def save_config():
     config = {
@@ -135,9 +142,13 @@ def save_config():
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False, "more_limits": {}}
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки data.json: {e}. Создаю новый.")
+            return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False, "more_limits": {}, "publications": []}
+    return {"invites": {}, "user_settings": {}, "has_invited": {}, "personal_topic_description_sent": False, "more_limits": {}, "publications": []}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -238,14 +249,12 @@ def get_share_url(ref_link):
 
 # Функция отправки с повторами и обработкой Flood control
 async def send_message_with_retry(chat_id, text, **kwargs):
-    """Отправляет сообщение с повторами до 3 раз при ошибке, учитывая Flood control."""
     for attempt in range(3):
         try:
             return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         except TelegramError as e:
             logger.error(f"Ошибка отправки (попытка {attempt+1}): {e}")
             if "Flood control" in str(e):
-                import re
                 match = re.search(r"Retry in (\d+) seconds", str(e))
                 if match:
                     retry_after = int(match.group(1))
@@ -310,6 +319,53 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка получения моделей: {e}")
         await update.message.reply_text("Не удалось получить список моделей. Проверьте логи.")
 
+# ===== КОМАНДА /stats =====
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_USER_ID:
+        await update.message.reply_text("Команда доступна только администратору.")
+        return
+
+    publications = data.get("publications", [])
+    if not publications:
+        await update.message.reply_text("Публикаций пока нет.")
+        return
+
+    total = len(publications)
+    today = date.today().isoformat()
+    today_count = sum(1 for p in publications if p.get("date") == today)
+    week_ago = (date.today() - timedelta(days=7)).isoformat()
+    week_count = sum(1 for p in publications if p.get("date") >= week_ago)
+
+    # По темам
+    topic_stats = {}
+    for p in publications:
+        topic = p.get("topic", "неизвестно")
+        topic_stats[topic] = topic_stats.get(topic, 0) + 1
+
+    # По форматам
+    format_stats = {}
+    for p in publications:
+        fmt = p.get("format", "неизвестно")
+        format_stats[fmt] = format_stats.get(fmt, 0) + 1
+
+    # Формируем ответ
+    msg = f"📊 Статистика публикаций\n"
+    msg += f"Всего: {total}\n"
+    msg += f"За сегодня: {today_count}\n"
+    msg += f"За 7 дней: {week_count}\n\n"
+
+    msg += "📂 По темам:\n"
+    for t, cnt in sorted(topic_stats.items(), key=lambda x: x[1], reverse=True):
+        emoji = TOPIC_EMOJI.get(t, "")
+        msg += f"  {emoji} {t}: {cnt}\n"
+
+    msg += "\n🎭 По форматам:\n"
+    for f, cnt in sorted(format_stats.items(), key=lambda x: x[1], reverse=True):
+        msg += f"  {f}: {cnt}\n"
+
+    await update.message.reply_text(msg)
+
 # ===== ГЕНЕРАЦИЯ ШУТКИ =====
 def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None, event=None):
     if format_type is None:
@@ -321,6 +377,10 @@ def generate_joke_sync(topic, format_type=None, user_settings=None, holiday=None
     prompt = f"Сгенерируй {format_type} на тему «{topic}»."
     if holiday:
         prompt += f" Приурочь шутку к празднику: {holiday}."
+        if "крещение" in holiday.lower():
+            prompt += " Только про купание в проруби и зимние забавы, без религиозных тем и обрядов."
+        if "хэллоуин" in holiday.lower():
+            prompt += " Без кровавых подробностей и страшилок, только весёлые и безобидные шутки."
     if event:
         prompt += f" Упомяни событие: {event}."
     if user_settings:
@@ -483,9 +543,8 @@ async def send_invite_with_photo(user_id):
         except Exception as e2:
             logger.error(f"Не удалось отправить даже текст: {e2}")
 
-# ===== НАСТРОЙКА ЗАКРЕПЛЁННЫХ КНОПОК В ТЕМАХ (С ПАУЗАМИ И ПОВТОРАМИ) =====
+# ===== НАСТРОЙКА ЗАКРЕПЛЁННЫХ КНОПОК В ТЕМАХ =====
 async def setup_forum_buttons():
-    """Отправляет и закрепляет сообщение с кнопками в каждую тему с паузами."""
     for topic, thread_id in TOPIC_IDS.items():
         for attempt in range(3):
             try:
@@ -560,10 +619,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = user_data.get("settings", {})
     logger.info(f"Callback {query.data} from {user.id}")
 
-    # Обработка кнопки "Хочу ещё!" (callback_data вида "more:тема")
     if query.data.startswith("more:"):
         topic = query.data.split(":", 1)[1]
-
         if not check_more_button_limit(user.id):
             await query.answer("На сегодня лимит дополнительных шуток исчерпан (5 из 5). Лимит обнулится в следующие сутки. Сегодня новые посты продолжат публиковаться автоматически в разных темах.", show_alert=True)
             return
@@ -589,42 +646,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Не удалось сгенерировать шутку. Попробуйте позже.", show_alert=True)
         return
 
-    # Обработка кнопки "Меню" (отправляем НОВОЕ сообщение с меню, не редактируя закреплённое)
     if query.data == "menu":
         await query.answer()
-        # Удаляем предыдущее меню, если оно есть
         old_menu_id = context.user_data.get("menu_message_id")
         if old_menu_id:
             try:
                 await bot.delete_message(chat_id=CHAT_ID, message_id=old_menu_id)
             except Exception:
                 pass
-        
-        # Создаём кнопки с URL на темы (переход в тему)
         keyboard = []
         for topic, thread_id in TOPIC_IDS.items():
             url = f"https://t.me/ai_umor_24/{thread_id}"
             keyboard.append([InlineKeyboardButton(f"{TOPIC_EMOJI.get(topic, '')} {topic}", url=url)])
-        # Добавляем кнопку закрытия меню
         keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close_menu")])
-        # Отправляем НОВОЕ сообщение в ту же тему
         sent_message = await bot.send_message(
             chat_id=CHAT_ID,
             text="Выберите тему:",
             message_thread_id=query.message.message_thread_id,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        # Сохраняем ID отправленного сообщения меню
         context.user_data["menu_message_id"] = sent_message.message_id
         return
 
-    # Обработка закрытия меню (удаляем сообщение с меню)
     if query.data == "close_menu":
         await query.answer()
-        # Удаляем сообщение, из которого вызван callback (оно с меню)
         try:
             await bot.delete_message(chat_id=CHAT_ID, message_id=query.message.message_id)
-            # Очищаем сохранённый ID
             context.user_data.pop("menu_message_id", None)
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение меню: {e}")
@@ -877,6 +924,21 @@ async def publish_joke():
                 parse_mode='HTML'
             )
             logger.info(f"Опубликовано в теме '{topic}' (thread_id={thread_id}) без кнопок")
+
+            # Сохраняем запись о публикации в data.json
+            publication = {
+                "date": date.today().isoformat(),
+                "topic": topic,
+                "format": format_type
+            }
+            publications = data.get("publications", [])
+            publications.append(publication)
+            # Ограничиваем размер до 1000 записей
+            if len(publications) > 1000:
+                publications = publications[-1000:]
+            data["publications"] = publications
+            save_data(data)
+
         except TelegramError as e:
             logger.error(f"Ошибка публикации: {e}")
 
@@ -922,6 +984,7 @@ async def main():
     application.add_handler(CommandHandler("personal", personal_joke))
     application.add_handler(CommandHandler("setlogo", setlogo))
     application.add_handler(CommandHandler("models", models_command))
+    application.add_handler(CommandHandler("stats", stats_command))  # <--- новая команда
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, handle_logo_photo))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
